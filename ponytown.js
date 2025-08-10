@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Pony Town 功能插件
 // @namespace    http://tampermonkey.net/
-// @version      0.1
-// @description  自动回复聊天消息、自动模拟人类操作挂机
+// @version      0.1.5
+// @description  添加百炼deepseek模型
 // @author       YourName
 // @match        https://pony.town/*
 // @grant        GM_xmlhttpRequest
@@ -14,13 +14,15 @@
     'use strict';
 
     // 定义变量
-    // 定义可能的动作按钮（根据实际游戏调整）
-    const ACTION_BUTTONS = [
-        '#action-bar > div.action-bar > virtual-list > action-button:nth-child(16) > button > div.cdk-drag-handle.cover',
-    ];
     const DEEPSEEK_API_KEY = ''; // 替换为您的DeepSeek API密钥
+    // const DEEPSEEK_API_KEY = ''; // 替换为您的DeepSeek API密钥   
     const DEEPSEEK_MODEL = 'deepseek-chat';
+    // const DEEPSEEK_MODEL = 'deepseek-r1-distill-qwen-1.5b';
+    const URL = 'https://api.deepseek.com/chat/completions';
+    // const URL = 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions';
+    
     const USERNAME = 'deepseek聊天机器人'; // 替换为您的角色名
+
     const COOLDOWN_TIME = 10000; // 聊天回复冷却时间(毫秒)
 
     // 状态变量
@@ -28,12 +30,6 @@
     let lastChatContent = ''; // 记录上一条消息内容
 
     // ------------执行具体逻辑-----------
-
-    // 检查状态是否为"Busy"
-    function isStatusBusy() {
-        const statusButton = document.querySelector('#app-game > div.top-menu > status-box > div > ui-button');
-        return statusButton && statusButton.getAttribute('title') === 'Status | Busy';
-    }
 
     // 获取最后一条聊天消息
     function getLastChatMessage() {
@@ -46,7 +42,7 @@
         const labelElement = lastLine.querySelector('.chat-line-label');
 
         if (!nameElement || !messageElement) return null;
-        if (lastLine && lastLine.classList.contains('chat-line-party')){
+        if (lastLine.classList.contains('chat-line-party')){
             console.log("派对消息");
             return null;
 
@@ -68,7 +64,7 @@
             console.log("私聊消息");
             return null;
         }
-        if( messageElement.textContent.trim() ==='Rejoined' ){
+        if( messageElement.textContent.trim() ==='Rejoined' || lastLine.classList.contains('chat-line-system')){
             console.log("系统消息");
             return null;
         }
@@ -79,57 +75,21 @@
             element: messageElement
         };
     }
-    // // 修正后的 API 调用函数
-    // async function queryDeepSeek(message) {
-    //     return new Promise((resolve, reject) => {
-    //         GM_xmlhttpRequest({
-    //             method: 'POST',
-    //             url: 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions',
-    //             headers: {
-    //                 'Content-Type': 'application/json',
-    //                 'Authorization': `Bearer sk-d7e68e8da3eb402e82b739e4c097be80`
-    //             },
-    //             data: JSON.stringify({
-    //                 model: 'deepseek-r1-distill-qwen-1.5b',
-    //                 messages: [{ role: 'user', content: message }],
-    //                 stream: false, // 关键修正
-    //             }),
-    //             onload: (response) => {
-    //                 try {
-    //                     const data = JSON.parse(response.responseText);
-    //                     if (data.choices && data.choices.length > 0) {
-    //                         resolve(data.choices[0].message.content.trim());
-    //                     } else {
-    //                         reject('API返回空响应');
-    //                     }
-    //                 } catch (e) {
-    //                     reject('解析API响应失败');
-    //                 }
-    //             },
-    //             onerror: (error) => {
-    //                 reject(`API请求错误: ${error.status}`);
-    //             }
-    //         });
-    //     });
-    // }
-    // 发送消息到DeepSeek API
+    // https://bailian.console.aliyun.com/
+    // 发送消息到阿里云的百炼大模型 Deepseek API
     async function queryDeepSeek(message) {
         return new Promise((resolve, reject) => {
             GM_xmlhttpRequest({
                 method: 'POST',
-                url: 'https://api.deepseek.com/chat/completions',
+                url: URL,
                 headers: {
                     'Content-Type': 'application/json',
                     'Authorization': `Bearer ${DEEPSEEK_API_KEY}`
                 },
                 data: JSON.stringify({
                     model: DEEPSEEK_MODEL,
-                    messages: [{
-                        role: 'user',
-                        content: message
-                    }],
-                    temperature: 0.7,
-                    max_tokens: 1024
+                    messages: [{ role: 'user', content: message }],
+                    stream: false
                 }),
                 onload: (response) => {
                     try {
@@ -149,6 +109,44 @@
             });
         });
     }
+    // https://platform.deepseek.com/
+    // 发送消息到DeepSeek API
+    // async function queryDeepSeek(message) {
+    //     return new Promise((resolve, reject) => {
+    //         GM_xmlhttpRequest({
+    //             method: 'POST',
+    //             url: URL,
+    //             headers: {
+    //                 'Content-Type': 'application/json',
+    //                 'Authorization': `Bearer ${DEEPSEEK_API_KEY}`
+    //             },
+    //             data: JSON.stringify({
+    //                 model: DEEPSEEK_MODEL,
+    //                 messages: [{
+    //                     role: 'user',
+    //                     content: message
+    //                 }],
+    //                 temperature: 0.7,
+    //                 max_tokens: 1024
+    //             }),
+    //             onload: (response) => {
+    //                 try {
+    //                     const data = JSON.parse(response.responseText);
+    //                     if (data.choices && data.choices.length > 0) {
+    //                         resolve(data.choices[0].message.content.trim());
+    //                     } else {
+    //                         reject('API返回空响应');
+    //                     }
+    //                 } catch (e) {
+    //                     reject('解析API响应失败');
+    //                 }
+    //             },
+    //             onerror: (error) => {
+    //                 reject(`API请求错误: ${error.status}`);
+    //             }
+    //         });
+    //     });
+    // }
 
     // 在聊天框中发送回复
     function sendChatReply(message) {
@@ -216,7 +214,7 @@
             // 调用DeepSeek API获取回复
             const response = await queryDeepSeek(
                 `你是一个在Pony Town游戏中的小马角色，叫${USERNAME}。以下消息是其他角色对你说的，请用30个字符以内的简短可爱的回复：\n\n` +
-                `[${chat.name}]: ${chat.message}`
+                `[${chat.name}]: ${chat.message}` 
             );
 
             // 记录上一次消息
@@ -233,69 +231,11 @@
         }
     }
 
-    // 随机点击函数（模拟人类行为）
-    function randomClick(element) {
-        if (!element) return;
-
-        // 创建鼠标事件
-        const mouseMoveEvent = new MouseEvent('mousemove', {
-            bubbles: true,
-            clientX: element.getBoundingClientRect().x + Math.random() * 10 - 5,
-            clientY: element.getBoundingClientRect().y + Math.random() * 10 - 5
-        });
-
-        const mouseDownEvent = new MouseEvent('mousedown', { bubbles: true });
-        const mouseUpEvent = new MouseEvent('mouseup', { bubbles: true });
-        const clickEvent = new MouseEvent('click', { bubbles: true });
-
-        // 触发事件序列
-        element.dispatchEvent(mouseMoveEvent);
-        setTimeout(() => {
-            element.dispatchEvent(mouseDownEvent);
-            setTimeout(() => {
-                element.dispatchEvent(mouseUpEvent);
-                element.dispatchEvent(clickEvent);
-            }, 100 + Math.random() * 200);
-        }, 100 + Math.random() * 200);
-    }
-
-    // 人类化延迟
-    function humanLikeDelay() {
-        const isLongPause = Math.random() < 0.7; // 70% 概率长暂停
-        const pauseTime = isLongPause
-            ? 60 + Math.random() * 120 // 1~3 分钟
-            : 10 + Math.random() * 10;    // 10~20 秒
-
-        console.log(`暂停: ${isLongPause ? '长' : '短'} ${pauseTime.toFixed(1)} 秒`);
-        return new Promise(resolve => setTimeout(resolve, pauseTime * 1000));
-    }
-
-    // 主循环
-    async function mainLoop() {
-        while (true) {
-            if (isStatusBusy() && autoActionsEnabled) { // 增加开关检查
-                const buttonSelector = ACTION_BUTTONS[Math.floor(Math.random() * ACTION_BUTTONS.length)];
-                const button = document.querySelector(buttonSelector);
-
-                if (button) {
-                    randomClick(button);
-                    await humanLikeDelay();
-                } else {
-                    console.log('未找到按钮，等待 5 秒后重试...');
-                    await new Promise(resolve => setTimeout(resolve, 5000));
-                }
-            } else {
-                console.log('状态不是"Busy"，等待 100 秒后检查...');
-                await new Promise(resolve => setTimeout(resolve, 100000));
-            }
-        }
-    }
 
     //------------------控制面板---------------------
 
     // 新增控制状态变量
     let autoChatEnabled = true;
-    let autoActionsEnabled = true;
     let controlPanel;
 
     function createControlPanel() {
@@ -322,16 +262,9 @@
             () => toggleFeature('chat')
         );
 
-        // 动作开关按钮
-        const actionButton = createControlButton(
-            '动作开关',
-            autoActionsEnabled ? '🟢 动作开启' : '🔴 动作关闭',
-            () => toggleFeature('actions')
-        );
 
         // 添加到面板
         controlPanel.appendChild(chatButton);
-        controlPanel.appendChild(actionButton);
         document.body.appendChild(controlPanel);
     }
 
@@ -373,11 +306,6 @@
             controlPanel.children[0].textContent = autoChatEnabled ? '🟢 聊天开启' : '🔴 聊天关闭';
             localStorage.setItem('ptAutoChat', autoChatEnabled);
             console.log(`聊天功能 ${autoChatEnabled ? '启用' : '禁用'}`);
-        } else {
-            autoActionsEnabled = !autoActionsEnabled;
-            controlPanel.children[1].textContent = autoActionsEnabled ? '🟢 动作开启' : '🔴 动作关闭';
-            localStorage.setItem('ptAutoActions', autoActionsEnabled);
-            console.log(`动作功能 ${autoActionsEnabled ? '启用' : '禁用'}`);
         }
     }
 
@@ -389,7 +317,6 @@
 
         // 从存储加载状态
         autoChatEnabled = localStorage.getItem('ptAutoChat') !== 'false';
-        autoActionsEnabled = localStorage.getItem('ptAutoActions') !== 'false';
 
         // 创建控制面板
         createControlPanel();
@@ -403,11 +330,10 @@
 
     // 启动脚本
     setTimeout(() => {
-        mainLoop();
-        // 额外的聊天消息监控
-        setInterval(processChatMessages, 10000);
         //初始化
         initScript();
+        // 额外的聊天消息监控
+        setInterval(processChatMessages, 10000);
 
     }, 3000);
 })();
