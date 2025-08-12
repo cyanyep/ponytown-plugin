@@ -1,9 +1,9 @@
 // ==UserScript==
 // @name         Pony Town 功能插件
 // @namespace    http://tampermonkey.net/
-// @version      0.2
-// @description  将模型封装、优化UI界面
-// @author       YourName
+// @version      0.2.1
+// @description  增加模型deepseek-r1-0528、多轮对话
+// @author       西西
 // @match        https://pony.town/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_setValue
@@ -25,7 +25,13 @@
         },
         {
             id: 'deepseek-r1-distill-qwen-1.5b',
-            name: 'DeepSeek R1 (阿里云百炼免费)',
+            name: 'DeepSeek R1 distill-qwen-1.5b(阿里云百炼免费)',
+            url: 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions',
+            apiKey: '' // 替换为您的API密钥
+        },
+        {
+            id: 'deepseek-r1-0528',
+            name: 'DeepSeek R1 0528',
             url: 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions',
             apiKey: '' // 替换为您的API密钥
         }
@@ -37,6 +43,11 @@
         selectedModelId: MODEL_CONFIGS[0].id,
         cooldownTime: 10000 // 聊天回复冷却时间(毫秒)
     };
+    
+    // 新增状态变量
+    let conversationHistory = []; // 存储对话上下文
+    let lastInteractionTime = Date.now(); // 最后交互时间戳
+    const HISTORY_TIMEOUT = 300000; // 5分钟无交互清除历史(毫秒)
 
     // 状态变量
     let settings = {...DEFAULT_SETTINGS};
@@ -57,25 +68,65 @@
         const labelElement = lastLine.querySelector('.chat-line-label');
 
         if (!nameElement || !messageElement) return null;
+        const msg = messageElement.textContent.trim();
+        
+        // 检查消息是否重复（新增核心逻辑）
+        if (msg === lastChatContent){
+            console.log('忽略重复消息:', msg);
+            return;
+        }
 
-        // 过滤不需要处理的消息类型
-        if (lastLine.classList.contains('chat-line-party')) return null;
-        if (nameElement.textContent.trim() === USERNAME) return null;
-        if (labelElement?.getAttribute('title') === 'Whisper') return null;
-        if (messageElement.textContent.trim() === 'Rejoined' ||
-            lastLine.classList.contains('chat-line-system')) return null;
+        if (lastLine.classList.contains('chat-line-party')){
+            console.log("派对消息");
+            return null;
+
+        }
+        if(nameElement.textContent.trim() === USERNAME){
+
+            console.log("自己消息");
+            return null;
+        }
+
+        const titleValue = labelElement.getAttribute('title');
+
+        // if (titleValue && titleValue.trim() === 'Whisper' && lastLine.textContent.includes('To')) {
+        //     console.log("自己消息");
+        //     return null;
+        // }
+
+        if (titleValue && titleValue.trim() === 'Whisper') {
+            console.log("私聊消息");
+            return null;
+        }
+        if( msg ==='Rejoined' || lastLine.classList.contains('chat-line-system')){
+            console.log("系统消息");
+            return null;
+        }
 
         return {
             name: nameElement.textContent.trim(),
-            message: messageElement.textContent.trim(),
+            message: msg,
             element: messageElement
         };
     }
 
     // 查询AI模型
-    async function queryAI(message) {
+    async function queryAI(message, userName) {
         const modelConfig = MODEL_CONFIGS.find(m => m.id === settings.selectedModelId);
         if (!modelConfig) throw new Error('未找到模型配置');
+        
+        // 构建多轮对话消息
+        const messages = [
+            { role: 'system', content: `你是Pony Town中的小马${USERNAME}，尽量用30字符内简短可爱的对话回复以下小马的消息（小马名字：消息）` }
+        ];
+        
+        // 添加上下文（如果启用）
+        if (settings.multiTurnEnabled && conversationHistory.length > 0) {
+            messages.push(...conversationHistory);
+        }
+        
+        messages.push({ role: 'user', content: `[${userName}]: ${message}` });
+
 
         return new Promise((resolve, reject) => {
             GM_xmlhttpRequest({
@@ -87,7 +138,7 @@
                 },
                 data: JSON.stringify({
                     model: modelConfig.id,
-                    messages: [{ role: 'user', content: message }],
+                    messages: messages,
                     stream: false
                 }),
                 onload: (response) => {
@@ -124,7 +175,7 @@
                 console.log('已发送聊天回复:', message);
                 cooldownActive = true;
                 setTimeout(() => cooldownActive = false, settings.cooldownTime);
-            }, 2000 + Math.random() * 3000);
+            }, 1000 + Math.random() * 2000);
         } else {
             console.log('发送聊天回复失败');
         }
@@ -135,19 +186,32 @@
         if (cooldownActive || !settings.autoChatEnabled) return;
 
         const chat = getLastChatMessage();
-        if (!chat || chat.message === lastChatContent) return;
+        if (!chat) return;
 
         try {
             console.log('收到新消息:', `${chat.name}: ${chat.message}`);
             lastChatContent = chat.message;
+            // 清除过期历史
+            if (Date.now() - lastInteractionTime > HISTORY_TIMEOUT) {
+                conversationHistory = [];
+            }
 
-            const response = await queryAI(
-                `你是一个在Pony Town游戏中的小马角色，叫${USERNAME}。请用30个字符以内的简短可爱的回复：\n\n` +
-                `[${chat.name}]: ${chat.message}`
-            );
-
+            lastInteractionTime = Date.now();
+            
+            const response = await queryAI(chat.name,chat.message);
             if (response) {
                 console.log('AI回复:', response);
+                // 存储上下文（如果启用多轮对话）
+                if (settings.multiTurnEnabled) {
+                    conversationHistory.push(
+                        { role: 'user', content: chat.message },
+                        { role: 'assistant', content: response }
+                    );
+                    // 限制历史长度（保留最近3轮对话）
+                    if (conversationHistory.length > 6) {
+                        conversationHistory = conversationHistory.slice(-6);
+                    }
+                }
                 sendChatReply(response);
             }
         } catch (error) {
@@ -200,6 +264,17 @@
         chatToggle.title = '开启/关闭自动聊天功能';
         panel.appendChild(chatToggle);
 
+
+        // 新增多轮对话开关
+        const multiTurnButton = createControlButton(
+            settings.multiTurnEnabled ? '🟢 多轮对话开启' : '🔴 多轮对话关闭',
+            () => toggleFeature('multiTurnEnabled'),
+            settings.multiTurnEnabled ? '#50fa7b' : '#ff5555'
+        );
+        multiTurnButton.title = '开启/关闭上下文记忆功能';
+        panel.appendChild(multiTurnButton);
+
+
         // 模型选择器
         const modelSelector = document.createElement('select');
         modelSelector.id = 'model-selector';
@@ -246,7 +321,7 @@
         const cooldownSlider = document.createElement('input');
         cooldownSlider.type = 'range';
         cooldownSlider.min = '3';
-        cooldownSlider.max = '30';
+        cooldownSlider.max = '20';
         cooldownSlider.value = settings.cooldownTime/1000;
         cooldownSlider.style.width = '100%';
         cooldownSlider.style.cursor = 'pointer';
@@ -268,6 +343,15 @@
         statusIndicator.style.fontSize = '13px';
         statusIndicator.style.color = '#8be9fd';
         panel.appendChild(statusIndicator);
+
+        // 新增历史状态指示器
+        const historyIndicator = document.createElement('div');
+        historyIndicator.id = 'pt-history';
+        historyIndicator.textContent = conversationStatus();
+        historyIndicator.style.marginTop = '10px';
+        historyIndicator.style.fontSize = '12px';
+        panel.appendChild(historyIndicator);
+        
 
         document.body.appendChild(panel);
 
@@ -353,6 +437,15 @@
         }
     }
 
+        
+    // 辅助函数
+    function conversationStatus() {
+        if (!settings.multiTurnEnabled) return '上下文记忆: 已禁用';
+        const entries = conversationHistory.length / 2;
+        const remaining = (HISTORY_TIMEOUT - (Date.now() - lastInteractionTime)) / 60000;
+        return `上下文: ${entries}轮对话 | 超时: ${remaining.toFixed(1)}分钟`;
+    }
+
     function toggleFeature(feature) {
         settings[feature] = !settings[feature];
         GM_setValue('pt_settings', settings);
@@ -369,8 +462,17 @@
                 button.textContent = settings.autoChatEnabled ? '🟢 聊天开启' : '🔴 聊天关闭';
                 button.style.background = settings.autoChatEnabled ? '#50fa7b' : '#ff5555';
             }
+        }// 多轮对话特殊处理
+        if (feature === 'multiTurnEnabled') {
+            if (!settings.multiTurnEnabled) {
+                conversationHistory = []; // 关闭时清除历史
+            }
+            // 更新状态显示
+            const historyElement = document.getElementById('pt-history');
+            if (historyElement) {
+                historyElement.textContent = conversationStatus();
+            }
         }
-
         console.log(`功能 ${feature} ${settings[feature] ? '启用' : '禁用'}`);
     }
 
@@ -396,11 +498,20 @@
         `;
         document.head.appendChild(style);
     }
-
+    // 初始化定时更新器
+    function initHistoryUpdater() {
+        setInterval(() => {
+            const historyElement = document.getElementById('pt-history');
+            if (historyElement && settings.multiTurnEnabled) {
+                historyElement.textContent = conversationStatus();
+            }
+        }, 60000); // 每分钟更新状态
+    }
     // 启动脚本
     setTimeout(() => {
         initScript();
         setInterval(processChatMessages, 5000);
+        initHistoryUpdater(); // 启动状态更新器
         console.log('Pony Town自动聊天脚本已启动');
     }, 3000);
 })();
