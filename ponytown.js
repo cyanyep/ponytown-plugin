@@ -2,7 +2,7 @@
 // @name         Pony Town 功能插件
 // @namespace    http://tampermonkey.net/
 // @version      0.2.3
-// @description  修复bug：并发聊天，导致重复消息
+// @description  version 0.2.3 修复bug：并发聊天，导致重复消息
 // @author       西西
 // @match        https://pony.town/*
 // @grant        GM_xmlhttpRequest
@@ -211,6 +211,7 @@
 
         const chat = getLastChatMessage();
         if (!chat) return;
+        await messageMutex.lock(); // 加锁
 
         try {
             console.log('收到新消息:', `${chat.name}: ${chat.message}`);
@@ -237,15 +238,12 @@
                     }
                 }
                 
-                await messageMutex.lock(); // 加锁
-                try{
-                    sendChatReply(response);
-                } finally {
-                    messageMutex.unlock(); // 解锁
-                }
+                sendChatReply(response);
             }
         } catch (error) {
             console.error('处理聊天时出错:', error);
+        } finally {
+            messageMutex.unlock(); // 解锁
         }
     }
 
