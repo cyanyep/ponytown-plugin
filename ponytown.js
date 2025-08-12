@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Pony Town 功能插件
 // @namespace    http://tampermonkey.net/
-// @version      0.2.1
-// @description  增加模型deepseek-r1-0528、多轮对话
+// @version      0.2.3
+// @description  修复bug：并发聊天，导致重复消息
 // @author       西西
 // @match        https://pony.town/*
 // @grant        GM_xmlhttpRequest
@@ -15,11 +15,32 @@
 (function() {
     'use strict';
 
+    //工具类
+    //互斥锁
+    class Mutex {
+        constructor() {
+            this.queue = [];
+            this.locked = false;
+        }
+        async lock() {
+            return new Promise(resolve => {
+            if (this.locked) this.queue.push(resolve);
+            else {
+                this.locked = true;
+                resolve();
+            }
+            });
+        }
+        unlock() {
+            if (this.queue.length > 0) this.queue.shift()();
+            else this.locked = false;
+        }
+    }
     // 定义模型配置
     const MODEL_CONFIGS = [
         {
             id: 'deepseek-chat',
-            name: 'DeepSeek Chat',
+            name: 'DeepSeek Chat',  
             url: 'https://api.deepseek.com/chat/completions',
             apiKey: '' // 替换为您的API密钥
         },
@@ -159,9 +180,12 @@
             });
         });
     }
+    
+    const messageMutex = new Mutex(); // 全局锁实例
 
     // 发送聊天回复
     function sendChatReply(message) {
+
         const chatInput = document.querySelector('.chat-textarea.chat-commons.hide-scrollbar');
         const sendButton = document.querySelector("#chat-box > div > div > div.chat-box-controls > ui-button > button");
 
@@ -212,7 +236,13 @@
                         conversationHistory = conversationHistory.slice(-6);
                     }
                 }
-                sendChatReply(response);
+                
+                await messageMutex.lock(); // 加锁
+                try{
+                    sendChatReply(response);
+                } finally {
+                    messageMutex.unlock(); // 解锁
+                }
             }
         } catch (error) {
             console.error('处理聊天时出错:', error);
@@ -514,4 +544,5 @@
         initHistoryUpdater(); // 启动状态更新器
         console.log('Pony Town自动聊天脚本已启动');
     }, 3000);
+
 })();
