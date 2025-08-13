@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Pony Town 功能插件
 // @namespace    http://tampermonkey.net/
-// @version      0.2.3
-// @description  version 0.2.3 修复bug：并发聊天，导致重复消息
+// @version      0.2.4
+// @description  修复bug、优化体验
 // @author       西西
 // @match        https://pony.town/*
 // @grant        GM_xmlhttpRequest
@@ -76,7 +76,7 @@
     let lastChatContent = '';
     const USERNAME = 'deepseek聊天机器人'; // 替换为您的角色名
 
-    // ------------核心功能函数-----------
+    // -----------------------聊天功能---------------------------
 
     // 获取最后一条聊天消息
     function getLastChatMessage() {
@@ -138,7 +138,7 @@
         
         // 构建多轮对话消息
         const messages = [
-            { role: 'system', content: `你是Pony Town中的小马${USERNAME}，尽量用30字符内简短可爱的对话回复以下小马的消息（小马名字：消息）` }
+            { role: 'system', content: `作为小马「${USERNAME}」，请以相近的字符数回复其他小马的消息（格式：名字：消息内容）。` }
         ];
         
         // 添加上下文（如果启用）
@@ -199,7 +199,7 @@
                 console.log('已发送聊天回复:', message);
                 cooldownActive = true;
                 setTimeout(() => cooldownActive = false, settings.cooldownTime);
-            }, 1000 + Math.random() * 2000);
+            }, 2000 + Math.random() * 1000);
         } else {
             console.log('发送聊天回复失败');
         }
@@ -211,7 +211,6 @@
 
         const chat = getLastChatMessage();
         if (!chat) return;
-        await messageMutex.lock(); // 加锁
 
         try {
             console.log('收到新消息:', `${chat.name}: ${chat.message}`);
@@ -232,9 +231,9 @@
                         { role: 'user', content: chat.message },
                         { role: 'assistant', content: response }
                     );
-                    // 限制历史长度（保留最近3轮对话）
-                    if (conversationHistory.length > 6) {
-                        conversationHistory = conversationHistory.slice(-6);
+                    // 限制历史长度（保留最近5轮对话）
+                    if (conversationHistory.length > 10) {
+                        conversationHistory = conversationHistory.slice(-10);
                     }
                 }
                 
@@ -242,9 +241,7 @@
             }
         } catch (error) {
             console.error('处理聊天时出错:', error);
-        } finally {
-            messageMutex.unlock(); // 解锁
-        }
+        } 
     }
 
     //------------------控制面板-------------------
@@ -385,6 +382,47 @@
 
         // 添加可拖动功能
         makeElementDraggable(panel);
+
+        
+        // 添加用于隐藏/显示的CSS样式
+        const existingStyle = document.getElementById('pt-control-panel-style');
+        if (!existingStyle) {
+            const style = document.createElement('style');
+            style.id = 'pt-control-panel-style';
+            style.textContent = `
+                #pt-control-panel.minimized {
+                    width: 30px !important;
+                    height: 20px !important;
+                    overflow: hidden !important;
+                    padding: 0 !important;
+                    bottom: 5px !important;
+                    right: 5px !important;
+                    top: auto !important;
+                    left: auto !important;
+                    cursor: pointer;
+                }
+                #pt-control-panel.minimized div:first-child {
+                    padding: 0;
+                    text-align: center;
+                    line-height: 20px;
+                    font-size: 16px;
+                    cursor: pointer;
+                    border-radius: 3px;
+                }
+                #pt-control-panel.minimized > *:not(:first-child) {
+                    display: none !important;
+                }
+            `;
+            document.head.appendChild(style);
+        }
+    }
+
+    // 切换控制面板的可见性
+    function togglePanelVisibility() {
+        const panel = document.getElementById('pt-control-panel');
+        const header = panel.querySelector('div:first-child');
+        panel.classList.toggle('minimized');
+        header.textContent = panel.classList.contains('minimized') ? '>' : '≡';
     }
 
     function createControlButton(text, onClick, color = '#bd93f9') {
@@ -420,9 +458,12 @@
 
         return button;
     }
-
+    
+    // 使元素可拖动（添加点击隐藏/显示功能）
     function makeElementDraggable(element) {
         let pos1 = 0, pos2 = 0, pos3 = 0, pos4 = 0;
+        let startX, startY;
+        let hasMoved = false;
 
         const header = document.createElement('div');
         header.textContent = '≡';
@@ -441,27 +482,53 @@
         header.addEventListener('mousedown', dragMouseDown);
 
         function dragMouseDown(e) {
+            // 如果面板处于隐藏状态，则直接切换为显示并退出
+            if (element.classList.contains('minimized')) {
+                togglePanelVisibility();
+                return;
+            }
+
             e.preventDefault();
+            startX = e.clientX;
+            startY = e.clientY;
+            hasMoved = false;
+
             pos3 = e.clientX;
             pos4 = e.clientY;
+
             document.addEventListener('mouseup', closeDragElement);
             document.addEventListener('mousemove', elementDrag);
         }
 
         function elementDrag(e) {
-            e.preventDefault();
-            pos1 = pos3 - e.clientX;
-            pos2 = pos4 - e.clientY;
-            pos3 = e.clientX;
-            pos4 = e.clientY;
-            element.style.top = (element.offsetTop - pos2) + "px";
-            element.style.right = "unset";
-            element.style.left = (element.offsetLeft - pos1) + "px";
+            if (!hasMoved) {
+                const dx = Math.abs(e.clientX - startX);
+                const dy = Math.abs(e.clientY - startY);
+                if (dx > 5 || dy > 5) {
+                    hasMoved = true;
+                }
+            }
+
+            if (hasMoved) {
+                e.preventDefault();
+                pos1 = pos3 - e.clientX;
+                pos2 = pos4 - e.clientY;
+                pos3 = e.clientX;
+                pos4 = e.clientY;
+                element.style.top = (element.offsetTop - pos2) + "px";
+                element.style.right = "unset";
+                element.style.left = (element.offsetLeft - pos1) + "px";
+            }
         }
 
         function closeDragElement() {
             document.removeEventListener('mouseup', closeDragElement);
             document.removeEventListener('mousemove', elementDrag);
+
+            // 如果没有移动，则视为点击，切换面板可见性
+            if (!hasMoved) {
+                togglePanelVisibility();
+            }
         }
     }
 
@@ -478,14 +545,15 @@
         settings[feature] = !settings[feature];
         GM_setValue('pt_settings', settings);
 
-        const statusElement = document.getElementById('pt-status');
-        if (statusElement) {
-            statusElement.textContent = `状态: ${settings[feature] ? '运行中' : '已暂停'}`;
-        }
-
         // 更新按钮文本
         if (feature === 'autoChatEnabled') {
-            const button = document.querySelector('#pt-control-panel > button');
+
+            const statusElement = document.getElementById('pt-status');
+            if (statusElement) {
+                statusElement.textContent = `状态: ${settings[feature] ? '运行中' : '已暂停'}`;
+            }
+            
+            const button = document.querySelector('button[title="开启/关闭自动聊天功能"]');
             if (button) {
                 button.textContent = settings.autoChatEnabled ? '🟢 聊天开启' : '🔴 聊天关闭';
                 button.style.background = settings.autoChatEnabled ? '#50fa7b' : '#ff5555';
@@ -494,6 +562,13 @@
         if (feature === 'multiTurnEnabled') {
             if (!settings.multiTurnEnabled) {
                 conversationHistory = []; // 关闭时清除历史
+            }
+            
+            // 更新 multiTurnEnabled 对应的按钮
+            const multiTurnButton = document.querySelector('button[title="开启/关闭上下文记忆功能"]'); 
+            if (multiTurnButton) {
+                multiTurnButton.textContent = settings.multiTurnEnabled ? '🟢 多轮对话开启' : '🔴 多轮对话关闭';
+                multiTurnButton.style.background = settings.multiTurnEnabled ? '#50fa7b' : '#ff5555';
             }
             // 更新状态显示
             const historyElement = document.getElementById('pt-history');
@@ -504,6 +579,7 @@
         console.log(`功能 ${feature} ${settings[feature] ? '启用' : '禁用'}`);
     }
 
+    
     function initScript() {
         // 加载保存的设置
         const savedSettings = GM_getValue('pt_settings');
