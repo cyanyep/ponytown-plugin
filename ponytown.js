@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Pony Town 功能插件
 // @namespace    http://tampermonkey.net/
-// @version      0.2.7
-// @description  1.增加上下文对话数滑动条
+// @version      0.2.8
+// @description  1.增加清空消息队列的功能；2.增加移除最旧消息的功能
 // @author       西西
 // @match        https://pony.town/*
 // @grant        GM_xmlhttpRequest
@@ -202,6 +202,25 @@
                     : "无"
             };
         }
+        // 新增清空队列方法
+        clear() {
+            this.queue = [];
+            console.log('消息队列已清空');
+        }
+        // === 新增：删除最旧消息 ===
+        async dequeueOldest() {
+            await this.lock.lock();
+            try {
+                if (this.queue.length > 0) {
+                    const removed = this.queue.shift(); // 移除最旧消息
+                    console.log('已移除最旧消息:', `${removed.name}: ${removed.message.substring(0, 20)}...`);
+                    return removed;
+                }
+                return null;
+            } finally {
+                this.lock.unlock();
+            }
+        }
     }
 
     // -----------------------聊天功能---------------------------
@@ -273,7 +292,7 @@
 
         // 构建多轮对话消息
         const messages = [
-            { role: 'system', content: `作为小马「${USERNAME}」，请尽量小于30个字符数回复其他小马的消息（格式：名字：消息内容）。回复消息最长必须小于150个字符。如果提问题，可以联网查找答案解答` }
+            { role: 'system', content: `作为小马「${USERNAME}」，请回复其他小马的消息（<30字符）（格式：名字：消息内容）。如果提问题，可以联网查找答案解答` }
         ];
 
         // 添加上下文（如果启用）
@@ -442,6 +461,42 @@
         );
         multiTurnButton.title = '开启/关闭上下文记忆功能';
         panel.appendChild(multiTurnButton);
+
+        // === 新增：清空消息队列按钮 ===
+        const clearQueueButton = createControlButton(
+            '清空消息队列',
+            () => {
+                messageQueue.clear();
+                QueueStatus();
+            },
+            '#ff79c6' // 粉色按钮
+        );
+        clearQueueButton.title = '清除当前所有待处理的消息';
+        panel.appendChild(clearQueueButton);
+
+        
+        // === 新增：移除最旧消息按钮 ===
+        const removeOldestButton = createControlButton(
+            '移除最旧消息',
+            async () => {
+                const removed = await messageQueue.dequeueOldest();
+                if (removed) {
+                    // 更新队列状态显示
+                    QueueStatus();
+
+                    // 添加操作反馈
+                    const feedback = `已移除: ${removed.name}的旧消息`;
+                    console.log(feedback);
+                    statusIndicator.textContent = feedback;
+                    setTimeout(() => statusIndicator.textContent = '状态: 运行中', 3000);
+                } else {
+                    console.log('消息队列已空，无消息可移除');
+                }
+            },
+            '#ffb86c' // 橙色按钮
+        );
+        removeOldestButton.title = '移除消息队列中最旧的一条待处理消息';
+        panel.appendChild(removeOldestButton);
 
 
         // 模型选择器
@@ -792,14 +847,18 @@
     // ================== 定时器设置 ==================
     function initQueueMonitor() {
         setInterval(() => {
-            const status = messageQueue.getStatus();
-            const queueStatusElem = document.getElementById('pt-queue-status');
-
-            if (queueStatusElem) {
-                queueStatusElem.textContent =
-                    `消息队列: ${status.size} | 等待消费者: ${status.waiting} | 下一条: ${status.next}`;
-            }
+            QueueStatus();
         }, 2000); // 每2秒更新一次队列状态
+    }
+
+    function QueueStatus(){
+        const status = messageQueue.getStatus();
+        const queueStatusElem = document.getElementById('pt-queue-status');
+
+        if (queueStatusElem) {
+            queueStatusElem.textContent =
+                `消息队列: ${status.size} | 等待消费者: ${status.waiting} | 下一条: ${status.next}`;
+        }
     }
 
     function initScript() {
