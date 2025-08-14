@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Pony Town 功能插件
 // @namespace    http://tampermonkey.net/
-// @version      0.2.5
-// @description  使用消息队列保存消息，消息削峰，防止消息堵塞丢失，并显示消息队列条数和下一条消息
+// @version      0.2.6
+// @description  1.优化提示词；2.修改消息队列为阻塞队列；3.优化调用AI并发送消息操作；4.增加控制消息获取频率滑动条
 // @author       西西
 // @match        https://pony.town/*
 // @grant        GM_xmlhttpRequest
@@ -42,18 +42,18 @@
     const DEFAULT_SETTINGS = {
         autoChatEnabled: true,
         selectedModelId: MODEL_CONFIGS[0].id,
-        cooldownTime: 10000 // 聊天回复冷却时间(毫秒)
+        cooldownTime: 10000 // 消息获取冷却时间(毫秒)
     };
 
     // 新增状态变量
     let conversationHistory = []; // 存储对话上下文
     let lastInteractionTime = Date.now(); // 最后交互时间戳
     const HISTORY_TIMEOUT = 300000; // 5分钟无交互清除历史(毫秒)
-
+    
     // 状态变量
     let settings = { ...DEFAULT_SETTINGS };
-    let cooldownActive = false;
     let lastChatContent = '';
+    let messageInterval; // 消息获取 定时器
     const USERNAME = 'deepseek聊天机器人'; // 替换为您的角色名
 
     //-------------------------------------------工具类-------------------------------------------
@@ -77,56 +77,136 @@
             else this.locked = false;
         }
     }
-    //消息队列
-    class MessageQueue {
+    // //消息队列
+    // class MessageQueue {
+    //     constructor() {
+    //         this.queue = [];
+    //         this.lock = new Mutex(); // 复用现有互斥锁
+    //         this.maxSize = 50; // 最大队列长度
+    //     }
+
+    //     // 生产者：消息入队
+    //     async enqueue(message) {
+    //         await this.lock.lock();
+    //         try {
+    //             // 检查队列是否已满
+    //             if (this.queue.length >= this.maxSize) {
+    //                 console.warn('消息队列已满，丢弃最旧的消息');
+    //                 this.queue.shift();
+    //             }
+
+    //             this.queue.push(message);
+    //         } finally {
+    //             this.lock.unlock();
+    //         }
+    //     }
+
+    //     // 消费者：消息出队
+    //     async dequeue() {
+    //         await this.lock.lock();
+    //         try {
+    //             return this.queue.shift() || null;
+    //         } finally {
+    //             this.lock.unlock();
+    //         }
+    //     }
+
+    //     // 检查队列状态
+    //     getStatus() {
+    //         return {
+    //             size: this.queue.length,
+    //             next: this.queue[0] 
+    //                 ? `${this.queue[0].name}: ${this.queue[0].message.substring(0, 15)}${this.queue[0].message.length > 15 ? "..." : ""}`
+    //                 : "无"
+    //         };
+    //     }
+    // }
+
+
+    // 阻塞队列
+    class BlockingQueue {
         constructor() {
             this.queue = [];
-            this.lock = new Mutex(); // 复用现有互斥锁
-            this.maxSize = 50; // 最大队列长度
+            this.waitingConsumers = []; // 存储等待中的消费者Promise
+            this.lock = new Mutex();    // 复用现有互斥锁
+            this.maxSize = 50;
         }
 
-        // 生产者：消息入队
         async enqueue(message) {
             await this.lock.lock();
             try {
-                // 检查队列是否已满
-                if (this.queue.length >= this.maxSize) {
-                    console.warn('消息队列已满，丢弃最旧的消息');
-                    this.queue.shift();
+                // 优先唤醒等待中的消费者
+                if (this.waitingConsumers.length > 0) {
+                    const resolve = this.waitingConsumers.shift();
+                    
+                    resolve(message); // 直接传递消息给消费者
+                    return;
                 }
                 
+                // 无等待消费者时入队
+                if (this.queue.length >= this.maxSize) {
+                    console.warn('消息队列已满，丢弃最旧的消息');
+                    this.queue.shift(); // 丢弃旧消息
+                }
                 this.queue.push(message);
             } finally {
                 this.lock.unlock();
             }
         }
 
-        // 消费者：消息出队
-        async dequeue() {
+        // async dequeue() {
+        //     await this.lock.lock();
+        //     try {
+        //         if (this.queue.length > 0) {
+        //             return this.queue.shift();
+        //         }
+        //     } finally {
+        //         this.lock.unlock();
+        //     }
+        //     // 如果在阻塞之前生产者获取锁并生产一个消息，会导致消息消费顺序不对
+        //     // 队列为空时阻塞消费者
+        //     return new Promise(resolve => {
+        //         this.waitingConsumers.push(resolve);
+        //     });
+        // }
+        async dequeue(timeout = 30000) {
             await this.lock.lock();
             try {
-                return this.queue.shift() || null;
+                if (this.queue.length > 0) {
+                    return this.queue.shift();
+                }
+                console.info("消息队列空，阻塞等待消息")
             } finally {
                 this.lock.unlock();
             }
+            return new Promise((resolve, reject) => {
+                const consumer = msg => {
+                    clearTimeout(timer);
+                    resolve(msg);
+                };
+                const timer = setTimeout(() => {
+                    const index = this.waitingConsumers.indexOf(consumer);
+                    if (index !== -1) this.waitingConsumers.splice(index, 1); // 移除回调
+                    resolve(null); // 返回空
+                }, timeout);
+                this.waitingConsumers.push(consumer);
+            });
         }
-
-        // 检查队列状态
         getStatus() {
             return {
                 size: this.queue.length,
-                next: this.queue[0] 
+                waiting: this.waitingConsumers.length, // 新增等待数
+                next: this.queue[0]
                     ? `${this.queue[0].name}: ${this.queue[0].message.substring(0, 15)}${this.queue[0].message.length > 15 ? "..." : ""}`
                     : "无"
             };
         }
     }
 
-
     // -----------------------聊天功能---------------------------
 
     // 初始化消息队列
-    const messageQueue = new MessageQueue();
+    const messageQueue = new BlockingQueue();
     // 获取最后一条聊天消息
     function getLastChatMessage() {
         const chatLines = document.querySelectorAll('.chat-line');
@@ -180,7 +260,7 @@
             message: msg,
             element: messageElement,
         });
-        
+
         // 更新最后消息内容
         lastChatContent = msg;
     }
@@ -192,7 +272,7 @@
 
         // 构建多轮对话消息
         const messages = [
-            { role: 'system', content: `作为小马「${USERNAME}」，请尽量小于30个字符数回复其他小马的消息（格式：名字：消息内容）。最长不能超过150个字符` }
+            { role: 'system', content: `作为小马「${USERNAME}」，请尽量小于30个字符数回复其他小马的消息（格式：名字：消息内容）。回复消息最长必须小于150个字符。如果提问题，可以联网查找答案解答` }
         ];
 
         // 添加上下文（如果启用）
@@ -238,22 +318,28 @@
     const messageMutex = new Mutex(); // 全局锁实例
 
     // 发送聊天回复
-    function sendChatReply(message) {
+    async function sendChatReply(message) {
 
         const chatInput = document.querySelector('.chat-textarea.chat-commons.hide-scrollbar');
         const sendButton = document.querySelector("#chat-box > div > div > div.chat-box-controls > ui-button > button");
 
         if (chatInput && sendButton) {
-            chatInput.value = message;
-            const event = new Event('input', { bubbles: true });
-            chatInput.dispatchEvent(event);
+            await messageMutex.lock();
+            try{
 
-            setTimeout(() => {
+                chatInput.value = message;
+                const event = new Event('input', { bubbles: true });
+                chatInput.dispatchEvent(event);
+                
+                // 添加随机延迟（模拟人类操作）
+                await new Promise(resolve => setTimeout(resolve, 2000 + Math.random() * 1000));
+                // 点击发送按钮
                 sendButton.click();
                 console.log('已发送聊天回复:', message);
-                cooldownActive = true;
-                setTimeout(() => cooldownActive = false, settings.cooldownTime);
-            }, 2000 + Math.random() * 1000);
+            }
+            finally{
+                messageMutex.unlock();
+            }
         } else {
             console.log('发送聊天回复失败');
         }
@@ -261,39 +347,40 @@
 
     // 处理聊天消息
     async function processChatMessages() {
-        if (cooldownActive || !settings.autoChatEnabled) return;
-        const chat = await messageQueue.dequeue();
+        while (settings.autoChatEnabled) {
+            const chat = await messageQueue.dequeue();
 
-        if (!chat) return;
+            if (!chat) continue;
 
-        console.log('处理消息:', `${chat.name}: ${chat.message}`);
-        try {
-            // 清除过期历史
-            if (Date.now() - lastInteractionTime > HISTORY_TIMEOUT) {
-                conversationHistory = [];
-            }
-
-            lastInteractionTime = Date.now();
-
-            const response = await queryAI(chat.name, chat.message);
-            if (response) {
-                console.log('AI回复:', response);
-                // 存储上下文（如果启用多轮对话）
-                if (settings.multiTurnEnabled) {
-                    conversationHistory.push(
-                        { role: 'user', content: chat.message },
-                        { role: 'assistant', content: response }
-                    );
-                    // 限制历史长度（保留最近5轮对话）
-                    if (conversationHistory.length > 10) {
-                        conversationHistory = conversationHistory.slice(-10);
-                    }
+            console.log('处理消息:', `${chat.name}: ${chat.message}`);
+            try {
+                // 清除过期历史
+                if (Date.now() - lastInteractionTime > HISTORY_TIMEOUT) {
+                    conversationHistory = [];
                 }
 
-                sendChatReply(response);
+                lastInteractionTime = Date.now();
+
+                const response = await queryAI(chat.name, chat.message);
+                if (response) {
+                    console.log('AI回复:', response);
+                    // 存储上下文（如果启用多轮对话）
+                    if (settings.multiTurnEnabled) {
+                        conversationHistory.push(
+                            { role: 'user', content: chat.message },
+                            { role: 'assistant', content: response }
+                        );
+                        // 限制历史长度（保留最近5轮对话）
+                        if (conversationHistory.length > 10) {
+                            conversationHistory = conversationHistory.slice(-10);
+                        }
+                    }
+
+                    sendChatReply(response);
+                }
+            } catch (error) {
+                console.error('处理聊天时出错:', error);
             }
-        } catch (error) {
-            console.error('处理聊天时出错:', error);
         }
     }
 
@@ -388,9 +475,9 @@
         panel.appendChild(modelLabel);
         panel.appendChild(modelSelector);
 
-        // 冷却时间调节器
+        // 消息获取间隔调节器
         const cooldownLabel = document.createElement('div');
-        cooldownLabel.textContent = `冷却时间: ${settings.cooldownTime / 1000}秒`;
+        cooldownLabel.textContent = `消息获取间隔: ${settings.cooldownTime / 1000}秒`;
         cooldownLabel.style.marginTop = '12px';
         cooldownLabel.style.marginBottom = '5px';
         cooldownLabel.style.fontSize = '14px';
@@ -398,7 +485,7 @@
 
         const cooldownSlider = document.createElement('input');
         cooldownSlider.type = 'range';
-        cooldownSlider.min = '3';
+        cooldownSlider.min = '1';
         cooldownSlider.max = '20';
         cooldownSlider.value = settings.cooldownTime / 1000;
         cooldownSlider.style.width = '100%';
@@ -406,8 +493,12 @@
 
         cooldownSlider.addEventListener('input', function () {
             settings.cooldownTime = this.value * 1000;
-            cooldownLabel.textContent = `冷却时间: ${this.value}秒`;
+            cooldownLabel.textContent = `消息获取间隔: ${this.value}秒`;
             GM_setValue('pt_settings', settings);
+
+            // 重启消息获取定时器
+            clearInterval(messageInterval);
+            messageInterval = setInterval(getLastChatMessage, settings.cooldownTime);
         });
         panel.appendChild(cooldownSlider);
 
@@ -630,6 +721,7 @@
                 button.textContent = settings.autoChatEnabled ? '🟢 聊天开启' : '🔴 聊天关闭';
                 button.style.background = settings.autoChatEnabled ? '#50fa7b' : '#ff5555';
             }
+            if(settings[feature]){processChatMessages();}
         }// 多轮对话特殊处理
         if (feature === 'multiTurnEnabled') {
             if (!settings.multiTurnEnabled) {
@@ -656,10 +748,10 @@
         setInterval(() => {
             const status = messageQueue.getStatus();
             const queueStatusElem = document.getElementById('pt-queue-status');
-            
+
             if (queueStatusElem) {
-                queueStatusElem.textContent = 
-                    `消息队列: ${status.size} | 下一条: ${status.next}`;
+                queueStatusElem.textContent =
+                    `消息队列: ${status.size} | 等待消费者: ${status.waiting} | 下一条: ${status.next}`;
             }
         }, 2000); // 每2秒更新一次队列状态
     }
@@ -698,8 +790,9 @@
     // 启动脚本
     setTimeout(() => {
         initScript();
-        setInterval(getLastChatMessage, 3000);      // 生产者：每3秒检查新消息
-        setInterval(processChatMessages, 5000);
+        messageInterval = setInterval(getLastChatMessage, settings.cooldownTime);// 生产者：每3秒检查新消息
+        // setInterval(processChatMessages, 5000);
+        processChatMessages();
         initHistoryUpdater(); // 启动状态更新器
         initQueueMonitor();
         console.log('Pony Town自动聊天脚本已启动');
