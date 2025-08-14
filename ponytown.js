@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Pony Town 功能插件
 // @namespace    http://tampermonkey.net/
-// @version      0.2.8
-// @description  1.增加清空消息队列的功能；2.增加移除最旧消息的功能
+// @version      0.2.9
+// @description  1.增加调用AI超时失败；2.面板功能优化
 // @author       西西
 // @match        https://pony.town/*
 // @grant        GM_xmlhttpRequest
@@ -50,7 +50,7 @@
     let conversationHistory = []; // 存储对话上下文
     let lastInteractionTime = Date.now(); // 最后交互时间戳
     const HISTORY_TIMEOUT = 300000; // 5分钟无交互清除历史(毫秒)
-    
+
     // 状态变量
     let settings = { ...DEFAULT_SETTINGS };
     let lastChatContent = '';
@@ -139,11 +139,11 @@
                 // 优先唤醒等待中的消费者
                 if (this.waitingConsumers.length > 0) {
                     const resolve = this.waitingConsumers.shift();
-                    
+
                     resolve(message); // 直接传递消息给消费者
                     return;
                 }
-                
+
                 // 无等待消费者时入队
                 if (this.queue.length >= this.maxSize) {
                     console.warn('消息队列已满，丢弃最旧的消息');
@@ -292,7 +292,7 @@
 
         // 构建多轮对话消息
         const messages = [
-            { role: 'system', content: `作为小马「${USERNAME}」，请回复其他小马的消息（<30字符）（格式：名字：消息内容）。如果提问题，可以联网查找答案解答` }
+            { role: 'system', content: `作为小马「${USERNAME}」，回复其他小马消息，回复内容需<30字符。若提问则联网查答。'` }
         ];
 
         // 添加上下文（如果启用）
@@ -304,6 +304,10 @@
 
 
         return new Promise((resolve, reject) => {
+            // 创建超时定时器
+            const timeoutId = setTimeout(() => {
+                reject('API请求超时');
+            }, 5000); // 5秒超时
             GM_xmlhttpRequest({
                 method: 'POST',
                 url: modelConfig.url,
@@ -317,6 +321,7 @@
                     stream: false
                 }),
                 onload: (response) => {
+                    clearTimeout(timeoutId); // 清除超时定时器
                     try {
                         const data = JSON.parse(response.responseText);
                         if (data.choices && data.choices.length > 0) {
@@ -329,6 +334,7 @@
                     }
                 },
                 onerror: (error) => {
+                    clearTimeout(timeoutId); // 清除超时定时器
                     reject(`API请求错误: ${error.status}`);
                 }
             });
@@ -345,19 +351,19 @@
 
         if (chatInput && sendButton) {
             await messageMutex.lock();
-            try{
+            try {
 
                 chatInput.value = message;
                 const event = new Event('input', { bubbles: true });
                 chatInput.dispatchEvent(event);
-                
+
                 // 添加随机延迟（模拟人类操作）
                 await new Promise(resolve => setTimeout(resolve, 2000 + Math.random() * 1000));
                 // 点击发送按钮
                 sendButton.click();
                 console.log('已发送聊天回复:', message);
             }
-            finally{
+            finally {
                 messageMutex.unlock();
             }
         } else {
@@ -428,7 +434,7 @@
             border: 1px solid #44475a;
             color: #f8f8f2;
             font-family: Arial, sans-serif;
-            min-width: 280px;
+            min-width: 40px;
         `;
 
         // 标题
@@ -474,7 +480,7 @@
         clearQueueButton.title = '清除当前所有待处理的消息';
         panel.appendChild(clearQueueButton);
 
-        
+
         // === 新增：移除最旧消息按钮 ===
         const removeOldestButton = createControlButton(
             '移除最旧消息',
@@ -561,7 +567,7 @@
         });
         panel.appendChild(cooldownSlider);
 
-        
+
         // ====== 上下文对话轮数滑动条 ======
         const historyLabel = document.createElement('div');
         historyLabel.textContent = `上下文记忆轮数: ${settings.maxHistoryTurns}`;
@@ -578,11 +584,11 @@
         historySlider.style.width = '100%';
         historySlider.style.cursor = 'pointer';
 
-        historySlider.addEventListener('input', function() {
+        historySlider.addEventListener('input', function () {
             settings.maxHistoryTurns = parseInt(this.value);
             historyLabel.textContent = `上下文记忆轮数: ${this.value}`;
             GM_setValue('pt_settings', settings);
-            
+
             // 立即应用新的历史长度限制
             trimConversationHistory();
         });
@@ -620,24 +626,24 @@
             const style = document.createElement('style');
             style.id = 'pt-control-panel-style';
             style.textContent = `
-                #pt-control-panel.minimized {
-                    width: 30px !important;
-                    height: 20px !important;
+               #pt-control-panel.minimized {
+                    width: 40px !important;       /* 圆形直径 */
+                    height: 40px !important;      /* 与宽度相同 */
                     overflow: hidden !important;
                     padding: 0 !important;
-                    bottom: 5px !important;
-                    right: 5px !important;
-                    top: auto !important;
-                    left: auto !important;
-                    cursor: pointer;
+                    border-radius: 50% !important; /* 关键：设为圆形 */
+                    background: rgba(30, 30, 46, 0.85) !important; /* 保持背景色 */
+                    display: flex !important;
+                    align-items: center !important;
+                    justify-content: center !important;
+                    cursor: pointer !important;
+                    box-shadow: 0 4px 20px rgba(0,0,0,0.25) !important; /* 保留阴影 */
                 }
                 #pt-control-panel.minimized div:first-child {
-                    padding: 0;
-                    text-align: center;
-                    line-height: 20px;
-                    font-size: 16px;
-                    cursor: pointer;
-                    border-radius: 3px;
+                    padding: 0 !important;
+                    font-size: 24px !important;   /* 增大图标 */
+                    line-height: 1 !important;
+                    transform: translateY(-1px);  /* 微调居中 */
                 }
                 #pt-control-panel.minimized > *:not(:first-child) {
                     display: none !important;
@@ -717,25 +723,15 @@
         const header = document.createElement('div');
         header.textContent = '≡';
         header.style.cssText = `
-            padding: 8px;
-            cursor: move;
+            padding: 0; /* 清除内边距 */
+            width: 100%;
             text-align: center;
-            background: rgba(40, 42, 54, 0.7);
-            border-radius: 8px 8px 0 0;
-            color: #f8f8f2;
-            font-size: 18px;
-            user-select: none;
         `;
         element.insertBefore(header, element.firstChild);
 
         header.addEventListener('mousedown', dragMouseDown);
 
         function dragMouseDown(e) {
-            // 如果面板处于隐藏状态，则直接切换为显示并退出
-            if (element.classList.contains('minimized')) {
-                togglePanelVisibility();
-                return;
-            }
 
             e.preventDefault();
             startX = e.clientX;
@@ -764,9 +760,22 @@
                 pos2 = pos4 - e.clientY;
                 pos3 = e.clientX;
                 pos4 = e.clientY;
-                element.style.top = (element.offsetTop - pos2) + "px";
+                // 计算新位置
+                let newLeft = element.offsetLeft - pos1;
+                let newTop = element.offsetTop - pos2;
+                
+                // 边界限制
+                const maxLeft = window.innerWidth - element.offsetWidth;
+                const maxTop = window.innerHeight - element.offsetHeight;
+                
+                // 确保面板不会移出屏幕边界
+                newLeft = Math.max(0, Math.min(newLeft, maxLeft));
+                newTop = Math.max(0, Math.min(newTop, maxTop));
+                
+                // 应用新位置
+                element.style.left = newLeft + "px";
+                element.style.top = newTop + "px";
                 element.style.right = "unset";
-                element.style.left = (element.offsetLeft - pos1) + "px";
             }
         }
 
@@ -798,12 +807,12 @@
                 button.textContent = settings.autoChatEnabled ? '🟢 聊天开启' : '🔴 聊天关闭';
                 button.style.background = settings.autoChatEnabled ? '#50fa7b' : '#ff5555';
             }
-            if(settings[feature]){processChatMessages();}
+            if (settings[feature]) { processChatMessages(); }
         }// 多轮对话特殊处理
         if (feature === 'multiTurnEnabled') {
             if (!settings.multiTurnEnabled) {
                 conversationHistory = []; // 关闭时清除历史
-            }else {
+            } else {
                 trimConversationHistory(); // 启用时也应用限制
             }
 
@@ -851,7 +860,7 @@
         }, 2000); // 每2秒更新一次队列状态
     }
 
-    function QueueStatus(){
+    function QueueStatus() {
         const status = messageQueue.getStatus();
         const queueStatusElem = document.getElementById('pt-queue-status');
 
@@ -883,22 +892,12 @@
         `;
         document.head.appendChild(style);
     }
-    // // 初始化定时更新器
-    // function initHistoryUpdater() {
-    //     setInterval(() => {
-    //         const historyElement = document.getElementById('pt-history');
-    //         if (historyElement && settings.multiTurnEnabled) {
-    //             historyElement.textContent = conversationStatus();
-    //         }
-    //     }, 60000); // 每分钟更新状态
-    // }
+
     // 启动脚本
     setTimeout(() => {
         initScript();
         messageInterval = setInterval(getLastChatMessage, settings.cooldownTime);// 生产者：每3秒检查新消息
-        // setInterval(processChatMessages, 5000);
         processChatMessages();
-        // initHistoryUpdater(); // 启动状态更新器
         initQueueMonitor();
         console.log('Pony Town自动聊天脚本已启动');
     }, 3000);
