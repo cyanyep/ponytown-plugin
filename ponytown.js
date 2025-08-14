@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Pony Town 功能插件
 // @namespace    http://tampermonkey.net/
-// @version      0.2.6
-// @description  1.优化提示词；2.修改消息队列为阻塞队列；3.优化调用AI并发送消息操作；4.增加控制消息获取频率滑动条
+// @version      0.2.7
+// @description  1.增加上下文对话数滑动条
 // @author       西西
 // @match        https://pony.town/*
 // @grant        GM_xmlhttpRequest
@@ -42,7 +42,8 @@
     const DEFAULT_SETTINGS = {
         autoChatEnabled: true,
         selectedModelId: MODEL_CONFIGS[0].id,
-        cooldownTime: 10000 // 消息获取冷却时间(毫秒)
+        cooldownTime: 10000, // 消息获取冷却时间(毫秒)
+        maxHistoryTurns: 5 // 新增默认上下文轮数
     };
 
     // 新增状态变量
@@ -370,9 +371,12 @@
                             { role: 'user', content: chat.message },
                             { role: 'assistant', content: response }
                         );
-                        // 限制历史长度（保留最近5轮对话）
-                        if (conversationHistory.length > 10) {
-                            conversationHistory = conversationHistory.slice(-10);
+                        // 限制历史长度（保留最近n轮对话）
+                        if (settings.multiTurnEnabled) {
+                            if (conversationHistory.length > settings.maxHistoryTurns * 2) {
+                                conversationHistory = conversationHistory.slice(-settings.maxHistoryTurns * 2);
+                            }
+                            updateHistoryDisplay();
                         }
                     }
 
@@ -475,7 +479,7 @@
         panel.appendChild(modelLabel);
         panel.appendChild(modelSelector);
 
-        // 消息获取间隔调节器
+        // ======消息获取间隔滑动条======
         const cooldownLabel = document.createElement('div');
         cooldownLabel.textContent = `消息获取间隔: ${settings.cooldownTime / 1000}秒`;
         cooldownLabel.style.marginTop = '12px';
@@ -501,6 +505,33 @@
             messageInterval = setInterval(getLastChatMessage, settings.cooldownTime);
         });
         panel.appendChild(cooldownSlider);
+
+        
+        // ====== 上下文对话轮数滑动条 ======
+        const historyLabel = document.createElement('div');
+        historyLabel.textContent = `上下文记忆轮数: ${settings.maxHistoryTurns}`;
+        historyLabel.style.marginTop = '12px';
+        historyLabel.style.marginBottom = '5px';
+        historyLabel.style.fontSize = '14px';
+        panel.appendChild(historyLabel);
+
+        const historySlider = document.createElement('input');
+        historySlider.type = 'range';
+        historySlider.min = '1';
+        historySlider.max = '20';
+        historySlider.value = settings.maxHistoryTurns;
+        historySlider.style.width = '100%';
+        historySlider.style.cursor = 'pointer';
+
+        historySlider.addEventListener('input', function() {
+            settings.maxHistoryTurns = parseInt(this.value);
+            historyLabel.textContent = `上下文记忆轮数: ${this.value}`;
+            GM_setValue('pt_settings', settings);
+            
+            // 立即应用新的历史长度限制
+            trimConversationHistory();
+        });
+        panel.appendChild(historySlider);
 
         // 状态指示器
         const statusIndicator = document.createElement('div');
@@ -568,7 +599,7 @@
         // 新增：队列状态显示
         const queueStatus = document.createElement('div');
         queueStatus.id = 'pt-queue-status';
-        queueStatus.textContent = '消息队列: 0 | 下一条: 无';
+        queueStatus.textContent = '消息队列: 0 | 等待消费者: 0 |下一条: 无';
         queueStatus.style.cssText = `
             margin-top: 10px;
             font-size: 12px;
@@ -695,15 +726,6 @@
         }
     }
 
-
-    // 辅助函数
-    function conversationStatus() {
-        if (!settings.multiTurnEnabled) return '上下文记忆: 已禁用';
-        const entries = conversationHistory.length / 2;
-        const remaining = (HISTORY_TIMEOUT - (Date.now() - lastInteractionTime)) / 60000;
-        return `上下文: ${entries}轮对话 | 超时: ${remaining.toFixed(1)}分钟`;
-    }
-
     function toggleFeature(feature) {
         settings[feature] = !settings[feature];
         GM_setValue('pt_settings', settings);
@@ -726,6 +748,8 @@
         if (feature === 'multiTurnEnabled') {
             if (!settings.multiTurnEnabled) {
                 conversationHistory = []; // 关闭时清除历史
+            }else {
+                trimConversationHistory(); // 启用时也应用限制
             }
 
             // 更新 multiTurnEnabled 对应的按钮
@@ -735,13 +759,35 @@
                 multiTurnButton.style.background = settings.multiTurnEnabled ? '#50fa7b' : '#ff5555';
             }
             // 更新状态显示
-            const historyElement = document.getElementById('pt-history');
-            if (historyElement) {
-                historyElement.textContent = conversationStatus();
-            }
+            updateHistoryDisplay();
         }
         console.log(`功能 ${feature} ${settings[feature] ? '启用' : '禁用'}`);
     }
+
+
+    // -------------------------------- 辅助函数 --------------------------------
+    function conversationStatus() {
+        if (!settings.multiTurnEnabled) return '上下文记忆: 已禁用';
+        const entries = conversationHistory.length / 2;
+        const remaining = (HISTORY_TIMEOUT - (Date.now() - lastInteractionTime)) / 60000;
+        return `上下文: ${entries}/${settings.maxHistoryTurns}轮对话 | 超时: ${remaining.toFixed(1)}分钟`;
+    }
+
+    // === 历史记录截断函数 ===
+    function trimConversationHistory() {
+        if (conversationHistory.length > settings.maxHistoryTurns * 2) {
+            conversationHistory = conversationHistory.slice(-settings.maxHistoryTurns * 2);
+        }
+        updateHistoryDisplay();
+    }
+
+    function updateHistoryDisplay() {
+        const historyElement = document.getElementById('pt-history');
+        if (historyElement) {
+            historyElement.textContent = conversationStatus();
+        }
+    }
+
 
     // ================== 定时器设置 ==================
     function initQueueMonitor() {
@@ -778,22 +824,22 @@
         `;
         document.head.appendChild(style);
     }
-    // 初始化定时更新器
-    function initHistoryUpdater() {
-        setInterval(() => {
-            const historyElement = document.getElementById('pt-history');
-            if (historyElement && settings.multiTurnEnabled) {
-                historyElement.textContent = conversationStatus();
-            }
-        }, 60000); // 每分钟更新状态
-    }
+    // // 初始化定时更新器
+    // function initHistoryUpdater() {
+    //     setInterval(() => {
+    //         const historyElement = document.getElementById('pt-history');
+    //         if (historyElement && settings.multiTurnEnabled) {
+    //             historyElement.textContent = conversationStatus();
+    //         }
+    //     }, 60000); // 每分钟更新状态
+    // }
     // 启动脚本
     setTimeout(() => {
         initScript();
         messageInterval = setInterval(getLastChatMessage, settings.cooldownTime);// 生产者：每3秒检查新消息
         // setInterval(processChatMessages, 5000);
         processChatMessages();
-        initHistoryUpdater(); // 启动状态更新器
+        // initHistoryUpdater(); // 启动状态更新器
         initQueueMonitor();
         console.log('Pony Town自动聊天脚本已启动');
     }, 3000);
