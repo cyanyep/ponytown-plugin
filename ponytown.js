@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Pony Town 功能插件
 // @namespace    http://tampermonkey.net/
-// @version      0.3
-// @description  1.优化请求AI超时失败;2.增加游戏功能：数字炸弹;
+// @version      0.3.2
+// @description  1.增加游戏海龟汤；
 // @author       西西
 // @match        https://pony.town/*
 // @grant        GM_xmlhttpRequest
@@ -37,11 +37,40 @@
             apiKey: '' // 替换为您的API密钥
         }
     ];
+    // 新增海龟汤题库（添加在MODEL_CONFIGS下方）
+    const TURTLE_SOUP_QUESTIONS = [
+        {
+            surface: "一个人走进餐厅，点了一碗海龟汤，刚喝了几口汤，他就突然意识到什么，然后开枪自杀了。为什么？",
+            answer: "这个人曾经和同伴在海上遇难，在极度饥饿的情况下，他们杀死了其中一个人（可能是他的朋友或亲人）来充饥，而当时他们骗他说那是海龟汤。现在他喝到真正的海龟汤，意识到当时吃的是人肉，所以自杀了。",
+            victoryCondition: "猜出这个人自杀的原因",
+            additional: "这个人有特殊的经历背景"
+        },
+        {
+            surface: "一个男人开车听着电台广播，突然广播中断了，一会儿又再次响了起来。男人听了一会儿很快就把车停下来，开枪自杀了。",
+            answer: "这个男人是电台主持人，广播中断时他听到自己录制的节目被播放，意识到自己已经死了，现在是在重播他生前的节目。",
+            victoryCondition: "猜出男人自杀的原因",
+            additional: "与时间感知有关"
+        },
+        {
+            surface: "妹妹被我弄丢了，直到第二年，我们才找到她。",
+            answer: "妹妹在圣诞节时被装扮成雪人放在院子里，第二年春天雪融化时才被发现。",
+            victoryCondition: "解释妹妹如何被找到",
+            additional: "与季节变化有关"
+        },
+        {
+            surface: "一个男人在沙漠中行走，发现了一具尸体，他检查了一下尸体，然后继续行走。几小时后，他自杀了。为什么？",
+            answer: "这个男人是宇航员，在太空任务中与同伴一起坠落在沙漠。他检查尸体时发现是自己的同伴，意识到自己也是将死之人，无法获救。",
+            victoryCondition: "解释男人自杀的原因",
+            additional: "与极端环境有关"
+        }
+    ];
 
     const CHAT_MODES = [
-        { id: 'game', name: '游戏模式', description: '简短回复(10字内)，专注于游戏操作' },
+        { id: 'game-digital-bomb', name: '数字炸弹游戏模式', description: '简短回复(10字内)，专注于游戏操作' },
+
+        { id: 'game-turtle-soup', name: '海龟汤游戏模式', description: '推理谜题游戏' },
         { id: 'chat', name: '聊天模式', description: '正常社交聊天(20-30字)' },
-        { id: 'story', name: '剧情模式', description: '角色扮演，详细描述(50字左右)' }
+        { id: 'story', name: '剧情模式', description: '角色扮演，详细描述(50字左右)' },
     ];
 
     // 默认设置
@@ -67,10 +96,19 @@
 
     // 游戏状态对象（需在外部作用域定义）
     let gameState = {
-        isPlaying: false,        // 游戏是否进行中
-        bombNumber: null,         // 炸弹数字
-        minRange: 1,             // 当前范围最小值
-        maxRange: 100,           // 当前范围最大值
+        digitalBomb: {
+            isPlaying: false,        // 游戏是否进行中
+            bombNumber: null,         // 炸弹数字
+            minRange: 1,             // 当前范围最小值
+            maxRange: 100,           // 当前范围最大值
+        },
+        turtleSoup: {
+            isPlaying: false,
+            currentQuestion: null,
+            correctAnswer: "",
+            victoryCondition: "",
+            hintsUsed: 0
+        }
     };
 
     //-------------------------------------------工具类-------------------------------------------
@@ -432,38 +470,38 @@
 
 
     function initBombGame() {
-        gameState = {
+        gameState.digitalBomb = {
             isPlaying: true,
             bombNumber: Math.floor(Math.random() * 100) + 1, // 1-100随机炸弹[4,6](@ref)
             minRange: 1,
             maxRange: 100,
         };
         sendChatReply(
-            `数字炸弹：范围: ${gameState.minRange}-${gameState.maxRange}。\n` +
+            `数字炸弹：范围: ${gameState.digitalBomb.minRange}-${gameState.digitalBomb.maxRange}。\n` +
             "请猜一个数字，我会缩小范围"
         );
     }
 
-    function handleGameMode(chat) {
-        if(chat.message === "17272" || chat.message === "继续") {
+    function handleDigitalBombMode(chat) {
+        if (chat.message === "17272" || chat.message === "继续") {
             initBombGame();
             return;
         }
-        if(chat.message === "结束"){
+        if (chat.message === "结束") {
             switchChatMode("16261");
         }
-        if(!gameState.isPlaying)return ;
+        if (!gameState.digitalBomb.isPlaying) return;
         const guess = parseInt(chat.message);
         // 验证数字有效性
         // 忽略无效数字
-        if(isNaN(guess))return;
-        if (guess < gameState.minRange || guess > gameState.maxRange) {
-            sendChatReply(`🚫 请输入${gameState.minRange}-${gameState.maxRange}之间的有效数字！`);
+        if (isNaN(guess)) return;
+        if (guess < gameState.digitalBomb.minRange || guess > gameState.digitalBomb.maxRange) {
+            sendChatReply(`🚫 请输入${gameState.digitalBomb.minRange}-${gameState.digitalBomb.maxRange}之间的有效数字！`);
             return;
         }
         // 猜中炸弹
-        if (guess === gameState.bombNumber) {
-            gameState.isPlaying = false;
+        if (guess === gameState.digitalBomb.bombNumber) {
+            gameState.digitalBomb.isPlaying = false;
             sendChatReply(`💥 ${chat.name} 触发了炸弹！游戏结束`);
             return;
         }
@@ -475,53 +513,220 @@
     // 更新游戏范围
     function updateGameRange(guess, playerName, shouldAIGuess = false) {
         let action = "";
-        if (guess > gameState.bombNumber) {
-            gameState.maxRange = guess - 1;
+        if (guess > gameState.digitalBomb.bombNumber) {
+            gameState.digitalBomb.maxRange = guess - 1;
             action = "猜大了，范围缩小至";
         } else {
-            gameState.minRange = guess + 1;
+            gameState.digitalBomb.minRange = guess + 1;
             action = "猜小了，范围缩小至";
         }
 
         // 发送玩家操作消息
-        sendChatReply(`📉 ${playerName} ${action}${gameState.minRange}-${gameState.maxRange}`);
-        
+        sendChatReply(`📉 ${playerName} ${action}${gameState.digitalBomb.minRange}-${gameState.digitalBomb.maxRange}`);
+
         // 根据参数决定是否触发AI猜测
         if (shouldAIGuess) {
             // AI自动猜测（二分法策略）
-            const aiGuess = Math.floor((gameState.minRange + gameState.maxRange) / 2);
+            const aiGuess = Math.floor((gameState.digitalBomb.minRange + gameState.digitalBomb.maxRange) / 2);
             let aiResult = `🤖 我的猜测：${aiGuess} - `;
-            
-            if (aiGuess === gameState.bombNumber) {
-                gameState.isPlaying = false;
+
+            if (aiGuess === gameState.digitalBomb.bombNumber) {
+                gameState.digitalBomb.isPlaying = false;
                 aiResult += "我踩到炸弹了！玩家胜利！";
-            } else if (aiGuess > gameState.bombNumber) {
-                gameState.maxRange = aiGuess - 1;
+            } else if (aiGuess > gameState.digitalBomb.bombNumber) {
+                gameState.digitalBomb.maxRange = aiGuess - 1;
                 aiResult += "我猜大了";
             } else {
-                gameState.minRange = aiGuess + 1;
+                gameState.digitalBomb.minRange = aiGuess + 1;
                 aiResult += "我猜小了";
             }
 
             // 延迟发送AI猜测结果
             sendChatReply(
-                `${aiResult}\n` + 
-                `当前范围：${gameState.minRange}-${gameState.maxRange}`
+                `${aiResult}\n` +
+                `当前范围：${gameState.digitalBomb.minRange}-${gameState.digitalBomb.maxRange}`
             );
         }
     }
+
+    // 初始化海龟汤游戏
+    function initTurtleSoupGame() {
+        const randomIndex = Math.floor(Math.random() * TURTLE_SOUP_QUESTIONS.length);
+        const question = TURTLE_SOUP_QUESTIONS[randomIndex];
+
+        gameState.turtleSoup = {
+            isPlaying: true,
+            currentQuestion: question.surface,
+            correctAnswer: question.answer,
+            victoryCondition: question.victoryCondition,
+            hintsUsed: 0
+        };
+
+        sendChatReply(
+            `🧠 海龟汤游戏开始！\n\n"${question.surface}"\n\n` +
+            `请通过提问来揭开谜底，我只能回答：是、否、无关或部分正确\n` +
+            `目标：${question.victoryCondition}`
+        );
+    }
+
+    // 处理海龟汤游戏逻辑
+    async function handleTurtleSoupMode(chat) {
+        if (!gameState.turtleSoup.isPlaying) return;
+
+        const userMessage = chat.message.toLowerCase();
+
+        // 特殊命令处理
+        if (userMessage === "结束游戏" || userMessage === "停止") {
+            endTurtleSoupGame(false);
+            return;
+        }
+
+        if (userMessage === "提示" || userMessage === "hint") {
+            provideHint();
+            return;
+        }
+
+        if (userMessage === "答案" || userMessage === "answer") {
+            revealAnswer();
+            return;
+        }
+
+        // 处理玩家提问
+        try {
+            const response = await queryTurtleSoupAI(chat.message);
+            sendChatReply(response);
+
+            // 检查是否猜中答案
+            if (response === "游戏结束") {
+                endTurtleSoupGame(true);
+            }
+        } catch (error) {
+            console.error('海龟汤游戏出错:', error);
+            sendChatReply("处理问题时出错了，请换个问题试试");
+        }
+    }
+
+    // 查询AI获取海龟汤回答
+    async function queryTurtleSoupAI(question, timeout = 30000) {
+        const modelConfig = MODEL_CONFIGS.find(m => m.id === settings.selectedModelId);
+
+        const messages = [
+            {
+                role: 'system',
+                content: `你正在主持海龟汤推理游戏。当前谜题汤底：${gameState.turtleSoup.correctAnswer}\n` +
+                    `游戏规则：你只能回答"是"、"否"、"无关"或"部分正确"。\n` +
+                    `只有当玩家猜出汤底的相似意思才能回答"游戏结束"。\n` +
+                    `不要解释，不要提供额外信息，严格遵守规则。`
+            },
+            { role: 'user', content: question }
+        ];
+        return new Promise((resolve, reject) => {
+            // 设置超时定时器（默认30秒）
+            const timer = setTimeout(() => {
+                reject('API请求超时');
+                if (xhr) {
+                    xhr.abort(); // 终止请求
+                }
+            }, timeout);
+            GM_xmlhttpRequest({
+                method: 'POST',
+                url: modelConfig.url,
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${modelConfig.apiKey}`
+                },
+                data: JSON.stringify({
+                    model: modelConfig.id,
+                    messages: messages,
+                    stream: false
+                }),
+                onload: (response) => {
+                    clearTimeout(timer); // 清除超时定时器
+                    try {
+                        const data = JSON.parse(response.responseText);
+                        if (data.choices && data.choices.length > 0) {
+                            resolve(data.choices[0].message.content.trim());
+                        } else {
+                            reject('API返回空响应');
+                        }
+                    } catch (e) {
+                        reject('解析API响应失败');
+                    }
+                },
+                onerror: (error) => {
+                    clearTimeout(timer); // 清除超时定时器
+                    reject(`API请求错误: ${error.status}`);
+                },
+                ontimeout: () => {
+                    clearTimeout(timer);
+                    reject('API请求超时（ontimeout）');
+                },
+                timeout: timeout // 设置GM_xmlhttpRequest内置超时
+            });
+        });
+    }
+
+    // 提供提示
+    function provideHint() {
+        if (gameState.turtleSoup.hintsUsed >= 3) {
+            sendChatReply("提示次数已用完！");
+            return;
+        }
+
+        gameState.turtleSoup.hintsUsed++;
+        const hints = [
+            `💡 提示 #${gameState.turtleSoup.hintsUsed}: 思考${gameState.turtleSoup.victoryCondition}`,
+            `💡 提示 #${gameState.turtleSoup.hintsUsed}: 注意谜题中的细节`,
+            `💡 提示 #${gameState.turtleSoup.hintsUsed}: 考虑可能的情感因素`
+        ];
+
+        sendChatReply(hints[gameState.turtleSoup.hintsUsed - 1]);
+    }
+
+    // 揭示答案
+    function revealAnswer() {
+        sendChatReply(
+            `🎉 谜底揭晓：\n\n${gameState.turtleSoup.correctAnswer}\n\n` +
+            `游戏结束！输入"海龟汤"开始新游戏`
+        );
+        gameState.turtleSoup.isPlaying = false;
+    }
+
+    // 结束游戏
+    function endTurtleSoupGame(isWin) {
+        if (isWin) {
+            sendChatReply(
+                `🎉 恭喜你解开了谜题！\n\n正确答案：${gameState.turtleSoup.correctAnswer}\n\n` +
+                `输入"海龟汤"开始新游戏`
+            );
+        } else {
+            sendChatReply(
+                `🛑 游戏结束！\n\n正确答案：${gameState.turtleSoup.correctAnswer}\n\n` +
+                `输入"海龟汤"开始新游戏`
+            );
+        }
+        gameState.turtleSoup.isPlaying = false;
+    }
+
     async function switchChatMode(chat) {
         if (chat.message === '17271') {
-            settings.chatMode = "game";
+            settings.chatMode = "game-digital-bomb";
             GM_setValue('pt_settings', settings);
             await sendChatReply(`开始游戏《数字炸弹》`);
-            console.log(`已切换至"game"模式`);
+            console.log(`已切换至"game-digital-bomb"模式`);
             initBombGame();
-        }else if(chat.message === '16261'){
+        } else if (chat.message === '16261') {
             settings.chatMode = "chat";
             GM_setValue('pt_settings', settings);
             console.log(`已切换至"chat"模式`);
 
+        }
+        else if (chat.message === '海龟汤' || chat.message === 'turtle soup') {
+            settings.chatMode = "game-turtle-soup";
+            GM_setValue('pt_settings', settings);
+            await sendChatReply(`开始海龟汤推理游戏`);
+            console.log(`已切换至"game-turtle-soup"模式`);
+            initTurtleSoupGame();
         }
     }
 
@@ -535,10 +740,13 @@
             console.log('处理消息:', `${chat.name}: ${chat.message}`);
             switchChatMode(chat);
             switch (settings.chatMode) {
-                case 'game':
-                    handleGameMode(chat);
+                case 'game-digital-bomb':
+                    handleDigitalBombMode(chat);
                     break;
                 case 'story':
+                    break;
+                case 'game-turtle-soup':
+                    await handleTurtleSoupMode(chat);
                     break;
                 default: // chat模式
                     await handleChatMode(chat);
