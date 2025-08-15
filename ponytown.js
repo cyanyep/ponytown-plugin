@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Pony Town 功能插件
 // @namespace    http://tampermonkey.net/
-// @version      0.3.3
-// @description  1.优化海龟汤游戏提示词；
+// @version      0.3.4
+// @description  1.优化游戏体验；
 // @author       西西
 // @match        https://pony.town/*
 // @grant        GM_xmlhttpRequest
@@ -107,6 +107,7 @@
             bombNumber: null,         // 炸弹数字
             minRange: 1,             // 当前范围最小值
             maxRange: 100,           // 当前范围最大值
+            shouldAIGuess: false    // AI陪玩
         },
         turtleSoup: {
             isPlaying: false,
@@ -481,20 +482,26 @@
             bombNumber: Math.floor(Math.random() * 100) + 1, // 1-100随机炸弹[4,6](@ref)
             minRange: 1,
             maxRange: 100,
+            shouldAIGuess: false,
         };
         sendChatReply(
             `数字炸弹：范围: ${gameState.digitalBomb.minRange}-${gameState.digitalBomb.maxRange}。\n` +
-            "请猜一个数字，我会缩小范围"
+            "请猜一个数字，我会缩小范围。\n"+
+            "输入AI可以让我陪玩。"
         );
     }
 
     function handleDigitalBombMode(chat) {
-        if (chat.message === "17272" || chat.message === "继续") {
+        if (chat.message === "数字炸弹" || chat.message === "继续") {
             initBombGame();
             return;
         }
         if (chat.message === "结束") {
             switchChatMode("16261");
+        }
+        if(chat.message.toLowerCase() === "ai"){
+            gameState.digitalBomb.shouldAIGuess=true;
+            sendChatReply("我来陪你玩❤");
         }
         if (!gameState.digitalBomb.isPlaying) return;
         const guess = parseInt(chat.message);
@@ -513,7 +520,7 @@
         }
 
         // 更新范围并响应
-        updateGameRange(guess, chat.name);
+        updateGameRange(guess, chat.name, gameState.digitalBomb.shouldAIGuess);
     }
 
     // 更新游戏范围
@@ -539,6 +546,8 @@
             if (aiGuess === gameState.digitalBomb.bombNumber) {
                 gameState.digitalBomb.isPlaying = false;
                 aiResult += "我踩到炸弹了！玩家胜利！";
+                sendChatReply(aiResult);
+                return;
             } else if (aiGuess > gameState.digitalBomb.bombNumber) {
                 gameState.digitalBomb.maxRange = aiGuess - 1;
                 aiResult += "我猜大了";
@@ -582,7 +591,7 @@
         const userMessage = chat.message.toLowerCase();
 
         // 特殊命令处理
-        if (userMessage === "结束游戏" || userMessage === "停止") {
+        if (userMessage === "结束" || userMessage === "停止") {
             endTurtleSoupGame(false);
             return;
         }
@@ -641,9 +650,9 @@
                 1. 你当前主持的谜题汤底：${gameState.turtleSoup.correctAnswer}
                 2. 必须严格按以下标准判断玩家回答：
                 - 玩家表述与汤底**核心事实完全一致** → 回答"游戏结束"
-                - 玩家表述与汤底**表述事实符合** → 回答"是"
-                - 玩家表述与汤底**表述事实矛盾** → 回答"否"
-                - 玩家表述与汤底**部分吻合** → 回答"部分正确"
+                - 玩家表述与汤底**表述的事实符合** → 回答"是"
+                - 玩家表述与汤底**表述的事实矛盾** → 回答"否"
+                - 玩家表述与汤底**表述的事实有符合也有矛盾** → 回答"部分正确"
                 - 玩家表述**无关汤底逻辑** → 回答"无关"
 
                 ## 游戏结束判定标准
@@ -753,7 +762,7 @@
             );
         } else {
             sendChatReply(
-                `🛑 游戏结束！\n\n正确答案：${gameState.turtleSoup.correctAnswer}\n\n` +
+                `🛑 游戏结束！\n` +
                 `输入"海龟汤"开始新游戏`
             );
         }
@@ -766,7 +775,6 @@
             GM_setValue('pt_settings', settings);
             await sendChatReply(`开始游戏《数字炸弹》`);
             console.log(`已切换至"game-digital-bomb"模式`);
-            initBombGame();
         } else if (chat.message === '16261') {
             settings.chatMode = "chat";
             GM_setValue('pt_settings', settings);
