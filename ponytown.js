@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Pony Town 功能插件
 // @namespace    http://tampermonkey.net/
-// @version      0.3.2
-// @description  1.增加游戏海龟汤；
+// @version      0.3.3
+// @description  1.优化海龟汤游戏提示词；
 // @author       西西
 // @match        https://pony.town/*
 // @grant        GM_xmlhttpRequest
@@ -63,6 +63,12 @@
             victoryCondition: "解释男人自杀的原因",
             additional: "与极端环境有关"
         }
+    ];
+
+    // 在全局变量部分新增
+    const INVALID_PATTERNS = [
+        /^[\s\W]+$/, // 纯符号或空格
+        /^[0-9]{6,}$/,    // 纯数字（如电话号码）
     ];
 
     const CHAT_MODES = [
@@ -591,10 +597,17 @@
             return;
         }
 
+
+        // 2. 模式匹配过滤
+        if (!INVALID_PATTERNS.some(pattern => pattern.test(userMessage))) {
+            console.log('过滤无效提问：模式匹配', userMessage);
+            return;
+        }
+
         // 处理玩家提问
         try {
             const response = await queryTurtleSoupAI(chat.message);
-            sendChatReply(response);
+            sendChatReply(chat.name+":"+response);
 
             // 检查是否猜中答案
             if (response === "游戏结束") {
@@ -610,13 +623,52 @@
     async function queryTurtleSoupAI(question, timeout = 30000) {
         const modelConfig = MODEL_CONFIGS.find(m => m.id === settings.selectedModelId);
 
+        // const messages = [
+        //     {
+        //         role: 'system',
+        //         content: `你正在主持海龟汤推理游戏。当前谜题汤底：${gameState.turtleSoup.correctAnswer}\n` +
+        //             `游戏规则：你只能回答"是"、"否"、"无关"或"部分正确"。\n` +
+        //             `只有当玩家猜出汤底的相似意思才能回答"游戏结束"。\n` +
+        //             `不要解释，不要提供额外信息，严格遵守规则。`
+        //     },
+        //     { role: 'user', content: question }
+        // ];
         const messages = [
             {
                 role: 'system',
-                content: `你正在主持海龟汤推理游戏。当前谜题汤底：${gameState.turtleSoup.correctAnswer}\n` +
-                    `游戏规则：你只能回答"是"、"否"、"无关"或"部分正确"。\n` +
-                    `只有当玩家猜出汤底的相似意思才能回答"游戏结束"。\n` +
-                    `不要解释，不要提供额外信息，严格遵守规则。`
+                content: `# 海龟汤主持人指令（严格模式）
+                ## 核心规则
+                1. 你当前主持的谜题汤底：${gameState.turtleSoup.correctAnswer}
+                2. 必须严格按以下标准判断玩家回答：
+                - 玩家表述与汤底**核心事实完全一致** → 回答"游戏结束"
+                - 玩家表述与汤底**表述事实符合** → 回答"是"
+                - 玩家表述与汤底**表述事实矛盾** → 回答"否"
+                - 玩家表述与汤底**部分吻合** → 回答"部分正确"
+                - 玩家表述**无关汤底逻辑** → 回答"无关"
+
+                ## 游戏结束判定标准
+                1. 玩家必须满足以下所有条件才能触发"游戏结束"：
+                - 包含汤底中**所有关键要素**（人物、行为、动机、结果）
+                - 表述逻辑与汤底**完全一致**（无偏差或附加信息）
+                - 示例：
+                    - 汤底："男子因误以为自己失明复发而自杀"
+                    - 可接受答案："他以为自己又看不见了所以自杀"
+                    - 拒绝答案："他眼睛有问题"（缺少自杀动机）
+
+                ## 强制约束
+                1. 禁止以下行为：
+                - 主动透露汤底信息（即使玩家接近答案）
+                - 对玩家回答做任何解释或补充
+                - 使用"游戏结束"外的任何结束语
+                2. 若玩家未达标准但接近答案：
+                - 回答"部分正确"并等待更精确的表述
+                - 示例：
+                    - 玩家："这个人自杀和视力有关吗？"
+                    - 回答："部分正确"（引导更完整表述）
+
+                ## 当前汤底关键要素（仅你可见）
+                - 核心事实：${gameState.turtleSoup.correctAnswer}
+                - 必须匹配要素：${gameState.turtleSoup.correctAnswer}`
             },
             { role: 'user', content: question }
         ];
@@ -709,7 +761,7 @@
     }
 
     async function switchChatMode(chat) {
-        if (chat.message === '17271') {
+        if (chat.message === '数字炸弹') {
             settings.chatMode = "game-digital-bomb";
             GM_setValue('pt_settings', settings);
             await sendChatReply(`开始游戏《数字炸弹》`);
