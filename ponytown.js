@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Pony Town 功能插件
 // @namespace    http://tampermonkey.net/
-// @version      0.2.9
-// @description  1.增加调用AI超时失败；2.面板功能优化
+// @version      0.3
+// @description  1.优化请求AI超时失败;2.增加游戏功能：数字炸弹;
 // @author       西西
 // @match        https://pony.town/*
 // @grant        GM_xmlhttpRequest
@@ -38,10 +38,17 @@
         }
     ];
 
+    const CHAT_MODES = [
+        { id: 'game', name: '游戏模式', description: '简短回复(10字内)，专注于游戏操作' },
+        { id: 'chat', name: '聊天模式', description: '正常社交聊天(20-30字)' },
+        { id: 'story', name: '剧情模式', description: '角色扮演，详细描述(50字左右)' }
+    ];
+
     // 默认设置
     const DEFAULT_SETTINGS = {
         autoChatEnabled: true,
         selectedModelId: MODEL_CONFIGS[0].id,
+        chatMode: 'chat', // 默认聊天模式
         cooldownTime: 10000, // 消息获取冷却时间(毫秒)
         maxHistoryTurns: 5 // 新增默认上下文轮数
     };
@@ -56,6 +63,15 @@
     let lastChatContent = '';
     let messageInterval; // 消息获取 定时器
     const USERNAME = 'deepseek聊天机器人'; // 替换为您的角色名
+
+
+    // 游戏状态对象（需在外部作用域定义）
+    let gameState = {
+        isPlaying: false,        // 游戏是否进行中
+        bombNumber: null,         // 炸弹数字
+        minRange: 1,             // 当前范围最小值
+        maxRange: 100,           // 当前范围最大值
+    };
 
     //-------------------------------------------工具类-------------------------------------------
     //互斥锁
@@ -286,13 +302,13 @@
     }
 
     // 查询AI模型
-    async function queryAI(message, userName) {
+    async function queryAI(message, userName, timeout = 30000) {
         const modelConfig = MODEL_CONFIGS.find(m => m.id === settings.selectedModelId);
         if (!modelConfig) throw new Error('未找到模型配置');
 
         // 构建多轮对话消息
         const messages = [
-            { role: 'system', content: `作为小马「${USERNAME}」，回复其他小马消息，回复内容需<30字符。若提问则联网查答。'` }
+            { role: 'system', content: `作为小马「${USERNAME}」，回复其他小马消息，回复内容需<15字符。若提问则联网查答。'` }
         ];
 
         // 添加上下文（如果启用）
@@ -304,10 +320,13 @@
 
 
         return new Promise((resolve, reject) => {
-            // 创建超时定时器
-            const timeoutId = setTimeout(() => {
+            // 设置超时定时器（默认30秒）
+            const timer = setTimeout(() => {
                 reject('API请求超时');
-            }, 5000); // 5秒超时
+                if (xhr) {
+                    xhr.abort(); // 终止请求
+                }
+            }, timeout);
             GM_xmlhttpRequest({
                 method: 'POST',
                 url: modelConfig.url,
@@ -321,7 +340,7 @@
                     stream: false
                 }),
                 onload: (response) => {
-                    clearTimeout(timeoutId); // 清除超时定时器
+                    clearTimeout(timer); // 清除超时定时器
                     try {
                         const data = JSON.parse(response.responseText);
                         if (data.choices && data.choices.length > 0) {
@@ -334,9 +353,14 @@
                     }
                 },
                 onerror: (error) => {
-                    clearTimeout(timeoutId); // 清除超时定时器
+                    clearTimeout(timer); // 清除超时定时器
                     reject(`API请求错误: ${error.status}`);
-                }
+                },
+                ontimeout: () => {
+                    clearTimeout(timer);
+                    reject('API请求超时（ontimeout）');
+                },
+                timeout: timeout // 设置GM_xmlhttpRequest内置超时
             });
         });
     }
@@ -371,6 +395,136 @@
         }
     }
 
+    async function handleChatMode(chat) {
+
+        try {
+            // 清除过期历史
+            if (Date.now() - lastInteractionTime > HISTORY_TIMEOUT) {
+                conversationHistory = [];
+            }
+
+            lastInteractionTime = Date.now();
+
+            const response = await queryAI(chat.name, chat.message);
+            if (response) {
+                console.log('AI回复:', response);
+                // 存储上下文（如果启用多轮对话）
+                if (settings.multiTurnEnabled) {
+                    conversationHistory.push(
+                        { role: 'user', content: chat.message },
+                        { role: 'assistant', content: response }
+                    );
+                    // 限制历史长度（保留最近n轮对话）
+                    if (settings.multiTurnEnabled) {
+                        if (conversationHistory.length > settings.maxHistoryTurns * 2) {
+                            conversationHistory = conversationHistory.slice(-settings.maxHistoryTurns * 2);
+                        }
+                        updateHistoryDisplay();
+                    }
+                }
+
+                sendChatReply(response);
+            }
+        } catch (error) {
+            console.error('处理聊天时出错:', error);
+        }
+    }
+
+
+    function initBombGame() {
+        gameState = {
+            isPlaying: true,
+            bombNumber: Math.floor(Math.random() * 100) + 1, // 1-100随机炸弹[4,6](@ref)
+            minRange: 1,
+            maxRange: 100,
+        };
+        sendChatReply(
+            `数字炸弹：范围: ${gameState.minRange}-${gameState.maxRange}。\n` +
+            "请猜一个数字，我会缩小范围"
+        );
+    }
+
+    function handleGameMode(chat) {
+        if(chat.message === "17272" || chat.message === "继续") {
+            initBombGame();
+            return;
+        }
+        if(chat.message === "结束"){
+            switchChatMode("16261");
+        }
+        if(!gameState.isPlaying)return ;
+        const guess = parseInt(chat.message);
+        // 验证数字有效性
+        // 忽略无效数字
+        if(isNaN(guess))return;
+        if (guess < gameState.minRange || guess > gameState.maxRange) {
+            sendChatReply(`🚫 请输入${gameState.minRange}-${gameState.maxRange}之间的有效数字！`);
+            return;
+        }
+        // 猜中炸弹
+        if (guess === gameState.bombNumber) {
+            gameState.isPlaying = false;
+            sendChatReply(`💥 ${chat.name} 触发了炸弹！游戏结束`);
+            return;
+        }
+
+        // 更新范围并响应
+        updateGameRange(guess, chat.name);
+    }
+
+    // 更新游戏范围
+    function updateGameRange(guess, playerName, shouldAIGuess = false) {
+        let action = "";
+        if (guess > gameState.bombNumber) {
+            gameState.maxRange = guess - 1;
+            action = "猜大了，范围缩小至";
+        } else {
+            gameState.minRange = guess + 1;
+            action = "猜小了，范围缩小至";
+        }
+
+        // 发送玩家操作消息
+        sendChatReply(`📉 ${playerName} ${action}${gameState.minRange}-${gameState.maxRange}`);
+        
+        // 根据参数决定是否触发AI猜测
+        if (shouldAIGuess) {
+            // AI自动猜测（二分法策略）
+            const aiGuess = Math.floor((gameState.minRange + gameState.maxRange) / 2);
+            let aiResult = `🤖 我的猜测：${aiGuess} - `;
+            
+            if (aiGuess === gameState.bombNumber) {
+                gameState.isPlaying = false;
+                aiResult += "我踩到炸弹了！玩家胜利！";
+            } else if (aiGuess > gameState.bombNumber) {
+                gameState.maxRange = aiGuess - 1;
+                aiResult += "我猜大了";
+            } else {
+                gameState.minRange = aiGuess + 1;
+                aiResult += "我猜小了";
+            }
+
+            // 延迟发送AI猜测结果
+            sendChatReply(
+                `${aiResult}\n` + 
+                `当前范围：${gameState.minRange}-${gameState.maxRange}`
+            );
+        }
+    }
+    async function switchChatMode(chat) {
+        if (chat.message === '17271') {
+            settings.chatMode = "game";
+            GM_setValue('pt_settings', settings);
+            await sendChatReply(`开始游戏《数字炸弹》`);
+            console.log(`已切换至"game"模式`);
+            initBombGame();
+        }else if(chat.message === '16261'){
+            settings.chatMode = "chat";
+            GM_setValue('pt_settings', settings);
+            console.log(`已切换至"chat"模式`);
+
+        }
+    }
+
     // 处理聊天消息
     async function processChatMessages() {
         while (settings.autoChatEnabled) {
@@ -379,36 +533,15 @@
             if (!chat) continue;
 
             console.log('处理消息:', `${chat.name}: ${chat.message}`);
-            try {
-                // 清除过期历史
-                if (Date.now() - lastInteractionTime > HISTORY_TIMEOUT) {
-                    conversationHistory = [];
-                }
-
-                lastInteractionTime = Date.now();
-
-                const response = await queryAI(chat.name, chat.message);
-                if (response) {
-                    console.log('AI回复:', response);
-                    // 存储上下文（如果启用多轮对话）
-                    if (settings.multiTurnEnabled) {
-                        conversationHistory.push(
-                            { role: 'user', content: chat.message },
-                            { role: 'assistant', content: response }
-                        );
-                        // 限制历史长度（保留最近n轮对话）
-                        if (settings.multiTurnEnabled) {
-                            if (conversationHistory.length > settings.maxHistoryTurns * 2) {
-                                conversationHistory = conversationHistory.slice(-settings.maxHistoryTurns * 2);
-                            }
-                            updateHistoryDisplay();
-                        }
-                    }
-
-                    sendChatReply(response);
-                }
-            } catch (error) {
-                console.error('处理聊天时出错:', error);
+            switchChatMode(chat);
+            switch (settings.chatMode) {
+                case 'game':
+                    handleGameMode(chat);
+                    break;
+                case 'story':
+                    break;
+                default: // chat模式
+                    await handleChatMode(chat);
             }
         }
     }
@@ -763,15 +896,15 @@
                 // 计算新位置
                 let newLeft = element.offsetLeft - pos1;
                 let newTop = element.offsetTop - pos2;
-                
+
                 // 边界限制
                 const maxLeft = window.innerWidth - element.offsetWidth;
                 const maxTop = window.innerHeight - element.offsetHeight;
-                
+
                 // 确保面板不会移出屏幕边界
                 newLeft = Math.max(0, Math.min(newLeft, maxLeft));
                 newTop = Math.max(0, Math.min(newTop, maxTop));
-                
+
                 // 应用新位置
                 element.style.left = newLeft + "px";
                 element.style.top = newTop + "px";
