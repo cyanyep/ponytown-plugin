@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Pony Town 功能插件
 // @namespace    http://tampermonkey.net/
-// @version      0.3.4
-// @description  1.优化游戏体验；
+// @version      0.3.5
+// @description  1.消息超长分割发送功能；2.优化海龟汤提示词；
 // @author       西西
 // @match        https://pony.town/*
 // @grant        GM_xmlhttpRequest
@@ -35,33 +35,57 @@
             name: 'DeepSeek R1 0528',
             url: 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions',
             apiKey: '' // 替换为您的API密钥
+        },
+        {
+            id: 'qwen-plus',
+            name: 'qwen-plus',
+            url: 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions',
+            apiKey: '' // 替换为您的API密钥
+        },
+        {
+            id: 'qwen-plus-latest',
+            name: 'qwen-plus-latest',
+            url: 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions',
+            apiKey: '' // 替换为您的API密钥
         }
     ];
     // 新增海龟汤题库（添加在MODEL_CONFIGS下方）
     const TURTLE_SOUP_QUESTIONS = [
         {
-            surface: "一个人走进餐厅，点了一碗海龟汤，刚喝了几口汤，他就突然意识到什么，然后开枪自杀了。为什么？",
-            answer: "这个人曾经和同伴在海上遇难，在极度饥饿的情况下，他们杀死了其中一个人（可能是他的朋友或亲人）来充饥，而当时他们骗他说那是海龟汤。现在他喝到真正的海龟汤，意识到当时吃的是人肉，所以自杀了。",
-            victoryCondition: "猜出这个人自杀的原因",
-            additional: "这个人有特殊的经历背景"
+            surface: "一名男子走进一家餐厅，点了一碗海龟汤，喝了几口后问服务员：‘这是真的海龟汤吗？’得到肯定答复后，他自杀了。为什么？",
+            answer: "男子曾与恋人在海难中漂流。濒死时，恋人骗他喝下用自己肉煮的‘海龟汤’救了他。多年后他喝到真正的海龟汤，意识到当年吃的是恋人的肉",
+            victoryCondition: "推理男子自杀的原因",
+            additional: "涉及欺骗与记忆"
         },
         {
-            surface: "一个男人开车听着电台广播，突然广播中断了，一会儿又再次响了起来。男人听了一会儿很快就把车停下来，开枪自杀了。",
-            answer: "这个男人是电台主持人，广播中断时他听到自己录制的节目被播放，意识到自己已经死了，现在是在重播他生前的节目。",
-            victoryCondition: "猜出男人自杀的原因",
-            additional: "与时间感知有关"
+            surface: "一个人坐火车去邻镇看病，看完后病全好了。返程火车经过隧道时，他突然跳车自杀。为什么？",
+            answer: "他患的是眼疾，治疗后复明。火车过隧道时陷入黑暗，他误以为旧病复发再次失明，绝望中自杀",
+            victoryCondition: "解释跳车动机",
+            additional: "与感知错觉有关"
         },
         {
-            surface: "妹妹被我弄丢了，直到第二年，我们才找到她。",
-            answer: "妹妹在圣诞节时被装扮成雪人放在院子里，第二年春天雪融化时才被发现。",
-            victoryCondition: "解释妹妹如何被找到",
-            additional: "与季节变化有关"
+            surface: "男子和女友在河边散步，女友落水失踪。几年后故地重游，钓鱼老人说‘这河从没长过水草’。男子听后跳河自杀。为什么？",
+            answer: "当年救援时他曾抓住女友头发，却误以为是水草松手导致女友溺亡。得知真相后自责寻死",
+            victoryCondition: "分析自杀触发点",
+            additional: "关键线索是水草"
         },
         {
-            surface: "一个男人在沙漠中行走，发现了一具尸体，他检查了一下尸体，然后继续行走。几小时后，他自杀了。为什么？",
-            answer: "这个男人是宇航员，在太空任务中与同伴一起坠落在沙漠。他检查尸体时发现是自己的同伴，意识到自己也是将死之人，无法获救。",
-            victoryCondition: "解释男人自杀的原因",
-            additional: "与极端环境有关"
+            surface: "母亲葬礼上，妹妹对一见钟情的男子消失耿耿于怀。一个月后，妹妹杀了姐姐。为什么？",
+            answer: "妹妹认为只有再办一场葬礼才能见到那个男子，因此杀害姐姐制造葬礼机会",
+            victoryCondition: "推敲杀人动机",
+            additional: "非情感纠纷"
+        },
+        {
+            surface: "当小明正准备离开家时，他无意中抬头，看了一眼全家福，那一瞬间，他意识到自己完蛋了",
+            answer: "小明家里被杀人魔闯入，全家都遇害了只有小明躲在床底，逃过一劫，当外面安静后，他悄悄爬出，但看到全家福时他猛然意识到，歹徒如果也看见全家福会不会等他出来呢",
+            victoryCondition: "解释小明为何意识到危险",
+            additional: "与信息暴露有关"
+        },
+        {
+            surface: "他喝了一口水，然后死了，但是水里没有毒",
+            answer: "我是一名马戏团员工。这是我第一次在很多人面前表演吞剑。由于紧张我的喉部产生呕吐反射。于是我咽了一口口水，剑划破了我的喉部刺穿了我的胃，但他们并没有发现我的异常。!以为我在搞节目效果等到发现时。为时已晚我已经死了。",
+            victoryCondition: "解释死亡的真实原因",
+            additional: "与表演事故相关"
         }
     ];
 
@@ -111,9 +135,11 @@
         },
         turtleSoup: {
             isPlaying: false,
+            currentIndex: 0,
             currentQuestion: null,
             correctAnswer: "",
             victoryCondition: "",
+            currentPlayer: null,
             hintsUsed: 0
         }
     };
@@ -414,32 +440,59 @@
 
     // 发送聊天回复
     async function sendChatReply(message) {
+        const MAX_MESSAGE_LENGTH = 150; // 单条消息最大长度
+        const SPLIT_MESSAGE_LENGTH = 140; // 分割消息最大长度
+        const CHUNK_DELAY_MS = 1500;   // 分片间延迟（毫秒）
 
         const chatInput = document.querySelector('.chat-textarea.chat-commons.hide-scrollbar');
         const sendButton = document.querySelector("#chat-box > div > div > div.chat-box-controls > ui-button > button");
 
-        if (chatInput && sendButton) {
-            await messageMutex.lock();
-            try {
 
-                chatInput.value = message;
-                const event = new Event('input', { bubbles: true });
-                chatInput.dispatchEvent(event);
-
-                // 添加随机延迟（模拟人类操作）
-                await new Promise(resolve => setTimeout(resolve, 2000 + Math.random() * 1000));
-                // 点击发送按钮
-                sendButton.click();
-                console.log('已发送聊天回复:', message);
-            }
-            finally {
-                messageMutex.unlock();
-            }
-        } else {
+        if (!chatInput || !sendButton) {
             console.log('发送聊天回复失败');
+            return;
+        }
+        await messageMutex.lock();
+        try {
+            // 短消息直接发送
+            if (message.length < MAX_MESSAGE_LENGTH) {
+                await sendMessage(chatInput, sendButton, message);
+            }         // 长消息分片发送
+            else {
+                const chunks = splitMessage(message, SPLIT_MESSAGE_LENGTH);
+                for (const chunk of chunks) {
+                    await sendMessage(chatInput, sendButton, chunk);
+                    // 添加随机延迟（模拟人类操作）
+                    await new Promise(resolve => setTimeout(resolve, 1000 + Math.random() * 1000));
+                }
+            }
+
+        }
+        finally {
+            messageMutex.unlock();
         }
     }
+    async function sendMessage(chatInput, sendButton, message) {
 
+        chatInput.value = message;
+        const event = new Event('input', { bubbles: true });
+        chatInput.dispatchEvent(event);
+
+        // 添加随机延迟（模拟人类操作）
+        await new Promise(resolve => setTimeout(resolve, 2000 + Math.random() * 1000));
+        // 点击发送按钮
+        sendButton.click();
+        console.log('已发送聊天回复:', message);
+    }
+    // 内部工具函数：按固定长度分割消息
+    function splitMessage(text, chunkSize) {
+        const chunks = [];
+        for (let offset = 0; offset < text.length; offset += chunkSize) {
+            let endIndex = offset + chunkSize;
+            chunks.push(text.slice(offset, endIndex));
+        }
+        return chunks;
+    }
     async function handleChatMode(chat) {
 
         try {
@@ -486,7 +539,7 @@
         };
         sendChatReply(
             `数字炸弹：范围: ${gameState.digitalBomb.minRange}-${gameState.digitalBomb.maxRange}。\n` +
-            "请猜一个数字，我会缩小范围。\n"+
+            "请猜一个数字，我会缩小范围。\n" +
             "输入AI可以让我陪玩。"
         );
     }
@@ -499,8 +552,8 @@
         if (chat.message === "结束") {
             switchChatMode("16261");
         }
-        if(chat.message.toLowerCase() === "ai"){
-            gameState.digitalBomb.shouldAIGuess=true;
+        if (chat.message.toLowerCase() === "ai") {
+            gameState.digitalBomb.shouldAIGuess = true;
             sendChatReply("我来陪你玩❤");
         }
         if (!gameState.digitalBomb.isPlaying) return;
@@ -565,12 +618,19 @@
     }
 
     // 初始化海龟汤游戏
-    function initTurtleSoupGame() {
-        const randomIndex = Math.floor(Math.random() * TURTLE_SOUP_QUESTIONS.length);
-        const question = TURTLE_SOUP_QUESTIONS[randomIndex];
+    function initTurtleSoupGame(index = -1) {
+        // 1. 索引处理逻辑
+        if (index >= 0) {
+            index = index % TURTLE_SOUP_QUESTIONS.length; // 确保索引有效
+        } else {
+            index = Math.floor(Math.random() * TURTLE_SOUP_QUESTIONS.length); // 随机选择
+        }
+
+        const question = TURTLE_SOUP_QUESTIONS[index];
 
         gameState.turtleSoup = {
             isPlaying: true,
+            currentIndex: index,
             currentQuestion: question.surface,
             correctAnswer: question.answer,
             victoryCondition: question.victoryCondition,
@@ -588,21 +648,24 @@
     async function handleTurtleSoupMode(chat) {
         if (!gameState.turtleSoup.isPlaying) return;
 
-        const userMessage = chat.message.toLowerCase();
-
+        const userMessage = chat.message;
         // 特殊命令处理
-        if (userMessage === "结束" || userMessage === "停止") {
+        if (userMessage === "结束") {
             endTurtleSoupGame(false);
             return;
         }
 
-        if (userMessage === "提示" || userMessage === "hint") {
+        if (userMessage === "提示") {
             provideHint();
             return;
         }
 
-        if (userMessage === "答案" || userMessage === "answer") {
+        if (userMessage === "答案") {
             revealAnswer();
+            return;
+        }
+        if (userMessage === "换一个" || userMessage === "换个") {
+            initTurtleSoupGame(gameState.turtleSoup.currentIndex + 1);
             return;
         }
 
@@ -616,7 +679,7 @@
         // 处理玩家提问
         try {
             const response = await queryTurtleSoupAI(chat.message);
-            sendChatReply(chat.name+":"+response);
+            sendChatReply(chat.name + ":" + response);
 
             // 检查是否猜中答案
             if (response === "游戏结束") {
@@ -652,7 +715,7 @@
                 - 玩家表述与汤底**核心事实完全一致** → 回答"游戏结束"
                 - 玩家表述与汤底**表述的事实符合** → 回答"是"
                 - 玩家表述与汤底**表述的事实矛盾** → 回答"否"
-                - 玩家表述与汤底**表述的事实有符合也有矛盾** → 回答"部分正确"
+                - 玩家表述与汤底**表述的事实同时包含正确信息和错误推断** → 回答"部分正确"
                 - 玩家表述**无关汤底逻辑** → 回答"无关"
 
                 ## 游戏结束判定标准
@@ -669,15 +732,18 @@
                 - 主动透露汤底信息（即使玩家接近答案）
                 - 对玩家回答做任何解释或补充
                 - 使用"游戏结束"外的任何结束语
-                2. 若玩家未达标准但接近答案：
-                - 回答"部分正确"并等待更精确的表述
+                2. 若玩家回答未达完整标准但正确（即涉及正确要素且无错误） → 回答"是"
                 - 示例：
                     - 玩家："这个人自杀和视力有关吗？"
-                    - 回答："部分正确"（引导更完整表述）
+                    - 回答："是"
+                3. 当回答同时包含：正确信息 + 错误/矛盾信息 → 回答"部分正确"
+                - 示例：
+                    - "他失明了才自杀" → 部分正确（错误：实际是误以为）
+                    - "因视力自杀但他是盲人" → 部分正确（矛盾：汤底视力正常）
 
                 ## 当前汤底关键要素（仅你可见）
                 - 核心事实：${gameState.turtleSoup.correctAnswer}
-                - 必须匹配要素：${gameState.turtleSoup.correctAnswer}`
+                - 必须匹配要素：${gameState.turtleSoup.correctAnswer}`,
             },
             { role: 'user', content: question }
         ];
